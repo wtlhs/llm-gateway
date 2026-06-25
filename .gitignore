@@ -1,0 +1,20 @@
+# 构建产物
+*.exe
+llm-gateway
+*.test
+
+# Go
+vendor/
+*.out
+
+# 环境配置(含密码)
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
