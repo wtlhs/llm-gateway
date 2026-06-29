@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"bytes"
+	"compress/gzip"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -26,4 +28,9 @@ func (r *byteReader) Read(p []byte) (int, error) {
 	n := copy(p, r.b[r.i:])
 	r.i += n
 	return n, nil
+}
+
+// newGzipWriter 返回写入 buf 的 gzip writer(测试辅助)。
+func newGzipWriter(buf *bytes.Buffer) *gzip.Writer {
+	return gzip.NewWriter(buf)
 }

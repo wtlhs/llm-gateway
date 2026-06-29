@@ -96,7 +96,13 @@ func (rec *Record) extractPromptMeta(body []byte) {
 		if rec.Model == "" {
 			rec.Model = probe.Model
 		}
-		rec.IsStream = probe.Stream
+		// 流式判定: 若检测到 stream=true, 延迟创建聚合器(NewRecord 阶段 stream 未知, agg 可能为 nil)
+		if probe.Stream && !rec.IsStream {
+			rec.IsStream = true
+			if rec.agg == nil {
+				rec.agg = newSSEAggregator()
+			}
+		}
 	}
 }
 
@@ -105,8 +111,9 @@ func (rec *Record) extractPromptMeta(body []byte) {
 func (rec *Record) AppendCapture(chunk []byte, maxBytes int64) {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
+	// 防御: 若 agg 未建(SetPrompt 没提取到 stream 字段的边界), 此处创建
 	if rec.agg == nil {
-		return // 非流式不应调用此方法
+		rec.agg = newSSEAggregator()
 	}
 	if rec.agg.total > maxBytes {
 		rec.Truncated = true

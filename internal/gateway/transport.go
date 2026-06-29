@@ -81,7 +81,9 @@ func (t *captureTransport) Forward(r *http.Request) (*http.Response, *audit.Reco
 	}
 
 	// 2. 请求 body 捕获 + 还原(仅白名单端点; K2/K3/C3)
-	if isCapture && r.Body != nil && r.ContentLength != 0 {
+	// 注意: 不用 r.ContentLength != 0 判断——经 proxy 包装/反向代理后 ContentLength 可能丢失,
+	// 只要 Body 非 nil 就应尝试捕获。
+	if isCapture && r.Body != nil {
 		snap, err := snapshotBody(r, t.cfg.PreBodyMaxBytes, t.cfg.MaxBodyBytes)
 		if err != nil {
 			if rec != nil {
@@ -108,6 +110,7 @@ func (t *captureTransport) Forward(r *http.Request) (*http.Response, *audit.Reco
 	// 4. 响应阶段: 读 upstream id 填入 record(M1)
 	if rec != nil {
 		rec.UpstreamRequestID = resp.Header.Get("X-Oneapi-Request-Id")
+		rec.HTTPStatus = resp.StatusCode // 修正: Forward 必须设置 HTTPStatus
 		rec.UpstreamT0 = upstreamT0
 		if t.isExcluded(rec.Model) {
 			rec.Excluded = true

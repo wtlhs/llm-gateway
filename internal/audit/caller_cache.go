@@ -37,6 +37,17 @@ func NewCallerCache(reader *db.TokenReader, refresh time.Duration) *CallerCache 
 	}
 }
 
+// NewNoopCallerCache 构造一个空 caller cache(不连接 DB), 供测试或离线场景使用。
+// Lookup 永远返回 miss, 不会 panic。
+func NewNoopCallerCache() *CallerCache {
+	return &CallerCache{
+		reader:  nil,
+		refresh: time.Hour,
+		data:    make(map[string]CallerInfo),
+		ready:   false,
+	}
+}
+
 // Start 启动后台刷新 goroutine。首次加载完成后 ready=true。
 // 返回的 backfillCh 在每次成功刷新后, 把本次 token map 推给调用方,
 // 用于触发 db.Store.BackfillCallerByTokenHash 回填历史记录(§5.4)。

@@ -14,11 +14,17 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// Persister 是 Pipeline 落库依赖的抽象。
+// 生产用 *db.Store(已实现); 测试用 spy 实现。抽接口是为了可测试性。
+type Persister interface {
+	Insert(ctx context.Context, c *db.Conversation) error
+}
+
 // Pipeline 是 capture → 落库的异步管道。
 // 设计依据 DESIGN.md §5.3: 双 channel 分级背压(I4) + M1 时序(响应阶段才 push)。
 type Pipeline struct {
 	cfg     *config.Config
-	store   *db.Store
+	store   Persister
 	callers *CallerCache
 
 	fullCh chan *Record // 完整记录(可丢)
@@ -32,7 +38,7 @@ type Pipeline struct {
 }
 
 // NewPipeline 构造管道(尚未启动 worker)。
-func NewPipeline(cfg *config.Config, store *db.Store, callers *CallerCache) *Pipeline {
+func NewPipeline(cfg *config.Config, store Persister, callers *CallerCache) *Pipeline {
 	return &Pipeline{
 		cfg:        cfg,
 		store:      store,
