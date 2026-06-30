@@ -50,6 +50,11 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
+// Pool 暴露底层连接池(供测试/查询场景使用, 生产代码应优先用 Store 的高层方法)。
+func (s *Store) Pool() *pgxpool.Pool {
+	return s.pool
+}
+
 // NewStore 基于 context_repo 库的连接池构造 Store。
 func NewStore(ctx context.Context, dbURL string, maxOpen int) (*Store, error) {
 	cfg, err := pgxpool.ParseConfig(dbURL)
