@@ -137,6 +137,20 @@ make tidy    # 整理依赖
 make build   # 编译单二进制
 ```
 
+## 验证工具(cmd/)
+
+除单元/集成测试外, 提供真实环境的验证工具(详见各目录 REPORT.md):
+
+| 工具 | 用途 | 运行 |
+|---|---|---|
+| `cmd/bench` | 压测网关纯开销(P99 增量, mock 上游基线) | `go run ./cmd/bench -concurrency=30 -duration=8s` |
+| `cmd/latcmp` | 真实 LLM 延迟对比(直连 vs 网关, 用户体感) | `NEWAPI_LIVE_TOKEN=sk-... go run ./cmd/latcmp/` |
+| `cmd/cachechk` | **Prompt 缓存影响验证**(网关是否破坏缓存命中) | `NEWAPI_LIVE_TOKEN=sk-... go run ./cmd/cachechk/` |
+
+**关键验证结论**:
+- 网关纯开销 P99 增量 ~1ms, 占真实 LLM 延迟 0.1%, 用户无感([latcmp/REPORT.md](cmd/latcmp/REPORT.md))
+- **Prompt 缓存命中率不受影响**(经网关 98% 命中, 与直连一致), 因原字节透传([cachechk/REPORT.md](cmd/cachechk/REPORT.md))
+
 ## 合规提示
 
 - 默认留存 90 天,**上线前需法务/安全评审**按公司数据分级政策确认(DESIGN.md §0.2)
