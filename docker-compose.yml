@@ -1,0 +1,45 @@
+# llm-gateway 生产部署
+# 使用: docker compose up -d
+# 配置通过 .env 文件注入(见 .env, 不进仓库)
+services:
+  llm-gateway:
+    # 镜像选择二选一:
+    #   方式A: 本地构建(首次部署/调试用)
+    build: .
+    #   方式B: 从镜像仓库拉(配置好后取消注释)
+    # image: registry.example.com/llm-gateway:latest
+    image: llm-gateway:local
+    container_name: llm-gateway
+    restart: unless-stopped
+
+    ports:
+      - "127.0.0.1:8080:8080"   # 仅监听本地, 由 nginx 反代到公网
+
+    env_file:
+      - .env
+
+    # 资源限制(按实际流量调整)
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 512M
+        reservations:
+          memory: 128M
+
+    # 健康检查(Phase 1 无专用 /healthz, 用 /ctx/stats 代理; 后续可加 /healthz)
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/ctx/stats"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+    # 优雅停机: 给足时间排空 capture channel
+    stop_grace_period: 40s

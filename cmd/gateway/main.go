@@ -56,25 +56,29 @@ func main() {
 	}
 	defer store.Close()
 
-	tokenReader, err := db.NewTokenReader(ctx, cfg.NewAPIB_URL)
-	if err != nil {
-		slog.Error("newapi db connect failed", "err", err)
-		os.Exit(1)
-	}
-	defer tokenReader.Close()
-
-	// 5. caller cache(启动即加载)
-	callers := audit.NewCallerCache(tokenReader, cfg.CallerCacheRefresh)
-	callers.Start(ctx, func(rows []db.TokenRow) {
-		// 回填历史记录(§5.4): cache 刷新后补 caller
-		for _, r := range rows {
-			// 注意: 此处 r.Key 短暂存在, 仅算 hash 后丢弃(M3)
-			h := audit.SHA256Hex(r.Key)
-			if n, err := store.BackfillCallerByTokenHash(ctx, h, r.Name, r.UserID, r.Group); err == nil && n > 0 {
-				slog.Debug("backfilled caller", "hash", h, "n", n)
+	// 5. caller cache(反查 New API token 表)。
+	// 降级设计: New API 库连接失败不应让网关起不来 —— caller 标识是增强,
+	// 核心的代理+沉淀职责必须可用。连接失败时降级为 noop cache(caller_tag 留空)。
+	var callers *audit.CallerCache
+	tokenReader, terr := db.NewTokenReader(ctx, cfg.NewAPIB_URL)
+	if terr != nil {
+		slog.Warn("newapi db connect failed, caller enrichment degraded to noop (gateway still functional)",
+			"err", terr, "hint", "检查 NEWAPI_DB_URL 的库名是否正确")
+		callers = audit.NewNoopCallerCache()
+	} else {
+		defer tokenReader.Close()
+		callers = audit.NewCallerCache(tokenReader, cfg.CallerCacheRefresh)
+		callers.Start(ctx, func(rows []db.TokenRow) {
+			// 回填历史记录(§5.4): cache 刷新后补 caller
+			for _, r := range rows {
+				// 注意: 此处 r.Key 短暂存在, 仅算 hash 后丢弃(M3)
+				h := audit.SHA256Hex(r.Key)
+				if n, err := store.BackfillCallerByTokenHash(ctx, h, r.Name, r.UserID, r.Group); err == nil && n > 0 {
+					slog.Debug("backfilled caller", "hash", h, "n", n)
+				}
 			}
-		}
-	})
+		})
+	}
 
 	// 6. pipeline(双 channel 落库)
 	pipeline := audit.NewPipeline(cfg, store, callers)
