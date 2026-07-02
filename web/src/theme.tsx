@@ -33,20 +33,22 @@ export function ThemeProvider({ children, locale }: { children: ReactNode; local
   const config = {
     algorithm: mode === 'dark' ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
     token: mode === 'dark' ? {
-      colorPrimary: '#7B73FF',
+      colorPrimary: '#F4F4F5',
       colorBgContainer: 'transparent',
-      colorBorder: 'rgba(255,255,255,0.08)',
-      colorBgElevated: '#131316',
-      borderRadius: 10,
-      fontSize: 14,
-      colorText: '#EDEDED',
-      colorTextSecondary: '#999',
+      colorBorder: '#26262A',
+      colorBgElevated: '#131314',
+      borderRadius: 6,
+      fontSize: 13,
+      colorText: '#F4F4F5',
+      colorTextSecondary: '#A1A1A6',
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Inter', 'PingFang SC', sans-serif",
     } : {
-      colorPrimary: '#635BFF',
+      colorPrimary: '#0D0D0D',
       colorBgContainer: '#FFFFFF',
-      colorBorder: 'rgba(0,0,0,0.06)',
-      borderRadius: 10,
-      fontSize: 14,
+      colorBorder: '#ECECEE',
+      borderRadius: 6,
+      fontSize: 13,
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Inter', 'PingFang SC', sans-serif",
     },
   }
 

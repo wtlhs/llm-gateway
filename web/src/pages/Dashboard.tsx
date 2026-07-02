@@ -6,23 +6,19 @@ import { api, type Overview, type TrendPoint, type DimensionCount } from '../api
 
 const { Text } = Typography
 
-// 现代风格指标卡：大数字 + 标签 + 强调色
-function MetricCard({ label, value, suffix, accent, danger }: {
-  label: string; value: number | string; suffix?: string; accent?: boolean; danger?: boolean
+function MetricCard({ label, value, suffix, danger }: {
+  label: string; value: number | string; suffix?: string; danger?: boolean
 }) {
   return (
-    <div className="solid-card" style={{ padding: '20px 24px', flex: 1, minWidth: 160 }}>
-      <Text style={{ color: 'var(--text-secondary)', fontSize: 13, display: 'block', marginBottom: 8 }}>
+    <div style={{ padding: '18px 20px', flex: 1, minWidth: 150 }}>
+      <Text style={{ color: 'var(--text-tertiary)', fontSize: 12, display: 'block', marginBottom: 10, fontWeight: 500 }}>
         {label}
       </Text>
       <div className="metric-value" style={{
-        color: danger ? 'var(--danger)' : accent ? 'transparent' : 'var(--text-primary)',
-        backgroundImage: accent ? 'var(--accent-grad)' : undefined,
-        WebkitBackgroundClip: accent ? 'text' : undefined,
-        WebkitTextFillColor: accent ? 'transparent' : undefined,
+        color: danger ? 'var(--red)' : 'var(--text-primary)',
       }}>
         {typeof value === 'number' ? value.toLocaleString() : value}
-        {suffix && <span style={{ fontSize: 14, fontWeight: 400, marginLeft: 4, color: 'var(--text-tertiary)' }}>{suffix}</span>}
+        {suffix && <span style={{ fontSize: 13, fontWeight: 400, marginLeft: 3, color: 'var(--text-tertiary)' }}>{suffix}</span>}
       </div>
     </div>
   )
@@ -36,97 +32,109 @@ export default function Dashboard() {
   const [topModels, setTopModels] = useState<DimensionCount[]>([])
   const [topCallers, setTopCallers] = useState<DimensionCount[]>([])
 
-  // 主题相关的图表配色
   const isDark = mode === 'dark'
-  const chartText = isDark ? '#999' : '#6B6B6B'
-  const chartGrid = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)'
-  const gradFrom = isDark ? 'rgba(123,115,255,0.35)' : 'rgba(99,91,255,0.25)'
-  const accentColor = isDark ? '#7B73FF' : '#635BFF'
+  const cText = isDark ? '#8B8B90' : '#6E6E73'
+  const cGrid = isDark ? '#1E1E22' : '#ECECEE'
+  const cAxis = isDark ? '#26262A' : '#F2F2F3'
+  const c1 = isDark ? '#E1E1E3' : '#0D0D0D'   // 对话量: 主色(近黑/近白)
+  const c2 = isDark ? '#5B5BFF' : '#2563EB'   // prompt: 低饱和蓝
+  const c3 = isDark ? '#3FAE6A' : '#16A34A'   // completion: 低饱和绿
 
   useEffect(() => {
-    Promise.all([
-      api.overview(), api.trend(7), api.topModels(5), api.topCallers(5),
-    ]).then(([ov, tr, tm, tc]) => {
-      setOverview(ov.data); setTrend(tr.data || [])
-      setTopModels(tm.data || []); setTopCallers(tc.data || [])
-    }).catch(e => message.error('加载失败: ' + e.message))
+    Promise.all([api.overview(), api.trend(7), api.topModels(5), api.topCallers(5)])
+      .then(([ov, tr, tm, tc]) => {
+        setOverview(ov.data); setTrend(tr.data || [])
+        setTopModels(tm.data || []); setTopCallers(tc.data || [])
+      }).catch(e => message.error('加载失败: ' + e.message))
       .finally(() => setLoading(false))
   }, [])
 
-  if (loading) return <div style={{ textAlign: 'center', padding: 120 }}><Spin size="large" /></div>
+  if (loading) return <div style={{ textAlign: 'center', padding: 120 }}><Spin /></div>
+
+  const tooltipStyle = {
+    backgroundColor: isDark ? '#18181B' : '#FFF',
+    borderColor: cGrid, borderWidth: 1,
+    textStyle: { color: isDark ? '#F4F4F5' : '#0D0D0D', fontSize: 12 },
+    extraCssText: 'border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);',
+  }
 
   const trendOption = {
-    tooltip: { trigger: 'axis', backgroundColor: isDark ? '#1A1A1D' : '#fff',
-      borderColor: chartGrid, textStyle: { color: isDark ? '#EDEDED' : '#1A1A1A' } },
-    legend: { data: ['对话量', 'Prompt', 'Completion'], textStyle: { color: chartText },
-      bottom: 0, icon: 'circle', itemWidth: 8, itemHeight: 8 },
-    grid: { left: 50, right: 50, top: 20, bottom: 40 },
+    tooltip: { trigger: 'axis', ...tooltipStyle, axisPointer: { type: 'line', lineStyle: { color: cAxis } } },
+    legend: { data: ['对话量', 'Prompt', 'Completion'], textStyle: { color: cText, fontSize: 11 },
+      bottom: 0, icon: 'roundRect', itemWidth: 10, itemHeight: 2, itemGap: 20 },
+    grid: { left: 44, right: 44, top: 16, bottom: 36 },
     xAxis: { type: 'category', data: trend.map(t => t.date.slice(5)),
-      axisLine: { lineStyle: { color: chartGrid } },
-      axisLabel: { color: chartText, fontSize: 11 } },
+      axisLine: { lineStyle: { color: cGrid } }, axisTick: { show: false },
+      axisLabel: { color: cText, fontSize: 11 } },
     yAxis: [
-      { type: 'value', name: '', splitLine: { lineStyle: { color: chartGrid } },
-        axisLabel: { color: chartText, fontSize: 11 } },
-      { type: 'value', splitLine: { show: false }, axisLabel: { color: chartText, fontSize: 11 } },
+      { type: 'value', splitLine: { lineStyle: { color: cGrid, type: 'solid' } },
+        axisLabel: { color: cText, fontSize: 11 } },
+      { type: 'value', splitLine: { show: false }, axisLabel: { color: cText, fontSize: 11 } },
     ],
     series: [
-      { name: '对话量', type: 'bar', barWidth: 18, itemStyle: { borderRadius: [4,4,0,0], color: accentColor },
-        data: trend.map(t => t.count) },
-      { name: 'Prompt', type: 'line', yAxisIndex: 1, smooth: true, symbol: 'none',
-        lineStyle: { width: 2, color: isDark ? '#5B8DEF' : '#3B82F6' },
-        areaStyle: { color: { type: 'linear', x:0,y:0,x2:0,y2:1,
-          colorStops:[{offset:0,color:gradFrom},{offset:1,color:'transparent'}]}},
+      { name: '对话量', type: 'bar', barWidth: 14, itemStyle: { color: c1 }, data: trend.map(t => t.count) },
+      { name: 'Prompt', type: 'line', yAxisIndex: 1, smooth: false, symbol: 'circle', symbolSize: 4,
+        lineStyle: { width: 1.5, color: c2 }, itemStyle: { color: c2 },
         data: trend.map(t => t.prompt_tokens) },
-      { name: 'Completion', type: 'line', yAxisIndex: 1, smooth: true, symbol: 'none',
-        lineStyle: { width: 2, color: isDark ? '#00D68F' : '#00B884' },
+      { name: 'Completion', type: 'line', yAxisIndex: 1, smooth: false, symbol: 'circle', symbolSize: 4,
+        lineStyle: { width: 1.5, color: c3 }, itemStyle: { color: c3 },
         data: trend.map(t => t.completion_tokens) },
     ],
   }
 
-  const pieOption = (data: DimensionCount[]) => ({
-    tooltip: { trigger: 'item', backgroundColor: isDark ? '#1A1A1D' : '#fff',
-      borderColor: chartGrid, textStyle: { color: isDark ? '#EDEDED' : '#1A1A1A' } },
-    legend: { type: 'scroll', bottom: 0, textStyle: { color: chartText, fontSize: 11 },
-      icon: 'circle', itemWidth: 7, itemHeight: 7 },
-    series: [{
-      type: 'pie', radius: ['42%', '68%'], center: ['50%', '42%'],
-      avoidLabelOverlap: true, itemStyle: { borderColor: isDark ? '#0A0A0B' : '#fff', borderWidth: 2 },
-      label: { show: false },
-      color: [accentColor, isDark?'#5B8DEF':'#3B82F6', isDark?'#00D68F':'#00B884',
-        isDark?'#FFAB00':'#FF8C00', isDark?'#FF6B6B':'#FF4D4F'],
-      data: data.map(d => ({ name: d.key || '(空)', value: d.count })),
-    }],
-  })
+  const barOption = (data: DimensionCount[], title: string) => {
+    const max = Math.max(...data.map(d => d.count), 1)
+    return {
+      tooltip: { trigger: 'axis', ...tooltipStyle, axisPointer: { type: 'shadow' } },
+      grid: { left: 8, right: 16, top: 24, bottom: 8, containLabel: true },
+      xAxis: { type: 'value', splitLine: { lineStyle: { color: cGrid } },
+        axisLabel: { color: cText, fontSize: 11 }, axisLine: { show: false }, axisTick: { show: false } },
+      yAxis: { type: 'category', data: data.map(d => (d.key || '(空)').slice(0, 16)).reverse(),
+        axisLine: { lineStyle: { color: cGrid } }, axisTick: { show: false },
+        axisLabel: { color: cText, fontSize: 11, width: 120, overflow: 'truncate' } },
+      series: [{
+        type: 'bar', barWidth: 14,
+        data: data.map(d => d.count).reverse(),
+        itemStyle: { color: isDark ? '#3A3A40' : '#E1E1E3', borderRadius: [0, 3, 3, 0] },
+        label: { show: true, position: 'right', color: cText, fontSize: 11 },
+      }],
+    }
+  }
 
   return (
     <div>
-      {/* 指标卡 row */}
-      <div style={{ display: 'flex', gap: 16, marginBottom: 20, flexWrap: 'wrap' }}>
-        <MetricCard label="对话总量" value={overview?.total || 0} accent />
+      {/* 指标卡：无边框, 靠间距分隔 */}
+      <div className="solid-card" style={{ display: 'flex', marginBottom: 16, overflow: 'hidden' }}>
+        <MetricCard label="对话总量" value={overview?.total || 0} />
+        <div style={{ width: 1, background: 'var(--border-color)', margin: '12px 0' }} />
         <MetricCard label="今日对话" value={overview?.today_count || 0} />
+        <div style={{ width: 1, background: 'var(--border-color)', margin: '12px 0' }} />
         <MetricCard label="Prompt Tokens" value={overview?.prompt_tokens_sum || 0} />
-        <MetricCard label="Completion Tokens" value={overview?.completion_tokens_sum || 0} />
+        <div style={{ width: 1, background: 'var(--border-color)', margin: '12px 0' }} />
+        <MetricCard label="Completion" value={overview?.completion_tokens_sum || 0} />
+        <div style={{ width: 1, background: 'var(--border-color)', margin: '12px 0' }} />
         <MetricCard label="平均延迟" value={Math.round(overview?.avg_latency_ms || 0)} suffix="ms" />
-        <MetricCard label="错误数" value={overview?.error_count || 0} danger={(overview?.error_count || 0) > 0} />
+        <div style={{ width: 1, background: 'var(--border-color)', margin: '12px 0' }} />
+        <MetricCard label="错误" value={overview?.error_count || 0} danger={(overview?.error_count || 0) > 0} />
       </div>
 
       {/* 趋势图 */}
-      <div className="solid-card" style={{ padding: 24, marginBottom: 20 }}>
-        <Text strong style={{ fontSize: 15, display: 'block', marginBottom: 16, color: 'var(--text-primary)' }}>
+      <div className="solid-card" style={{ padding: '20px 24px', marginBottom: 16 }}>
+        <Text style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 16, color: 'var(--text-primary)' }}>
           7 天趋势
         </Text>
-        <ReactECharts option={trendOption} style={{ height: 280 }} />
+        <ReactECharts option={trendOption} style={{ height: 240 }} />
       </div>
 
-      {/* 双饼图 */}
+      {/* 横向条形图(替代花哨饼图) */}
       <div style={{ display: 'flex', gap: 16 }}>
-        <div className="solid-card" style={{ padding: 24, flex: 1 }}>
-          <Text strong style={{ fontSize: 14, display: 'block', marginBottom: 8, color: 'var(--text-primary)' }}>Top 模型</Text>
-          <ReactECharts option={pieOption(topModels)} style={{ height: 240 }} />
+        <div className="solid-card" style={{ padding: '20px 24px', flex: 1 }}>
+          <Text style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 12, color: 'var(--text-primary)' }}>Top 模型</Text>
+          <ReactECharts option={barOption(topModels, '模型')} style={{ height: 180 }} />
         </div>
-        <div className="solid-card" style={{ padding: 24, flex: 1 }}>
-          <Text strong style={{ fontSize: 14, display: 'block', marginBottom: 8, color: 'var(--text-primary)' }}>Top 调用方</Text>
-          <ReactECharts option={pieOption(topCallers)} style={{ height: 240 }} />
+        <div className="solid-card" style={{ padding: '20px 24px', flex: 1 }}>
+          <Text style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 12, color: 'var(--text-primary)' }}>Top 调用方</Text>
+          <ReactECharts option={barOption(topCallers, '调用方')} style={{ height: 180 }} />
         </div>
       </div>
     </div>
