@@ -20,6 +20,7 @@
   --accent-bg: #F2F2F3;
   --blue: #2563EB;            /* 仅图表用, 低饱和 */
   --green: #16A34A;
+  --green-bg: rgba(22, 163, 74, 0.08);
   --amber: #D97706;
   --red: #DC2626;
 
@@ -51,6 +52,7 @@
   --accent-bg: #1E1E22;
   --blue: #60A5FA;
   --green: #4ADE80;
+  --green-bg: rgba(74, 222, 128, 0.1);
   --amber: #FBBF24;
   --red: #F87171;
 
@@ -82,11 +84,18 @@ body {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
-  transition: background-color 0.15s ease, border-color 0.15s ease;
+  transition: border-color 0.2s ease;
 }
 .solid-card:hover {
   border-color: var(--border-strong);
 }
+
+/* 数据加载微闪烁(精致感) */
+@keyframes shimmer {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+.loading-shimmer { animation: shimmer 1.5s ease-in-out infinite; }
 
 /* 大数字（看板指标）：纯色, 无渐变 */
 .metric-value {
