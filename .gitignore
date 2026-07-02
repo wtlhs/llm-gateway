@@ -7,8 +7,11 @@ llm-gateway
 vendor/
 *.out
 
-# 环境配置(含密码)
+# 环境配置(含密码, 真实文件不入库; 只提交 .env*.example 模板)
 .env
+.env.deploy
+.env.*.local
+dist/
 
 # IDE
 .vscode/

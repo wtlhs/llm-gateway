@@ -1,0 +1,44 @@
+# llm-gateway 服务器部署（82.156.138.160）
+# 加入 1panel-network 以访问 New API 和 PostgreSQL 容器
+services:
+  llm-gateway:
+    image: llm-gateway:local
+    container_name: llm-gateway
+    restart: unless-stopped
+
+    ports:
+      - "127.0.0.1:8080:8080"   # 仅监听本地，由 nginx 反代到公网
+
+    env_file:
+      - .env
+
+    # 加入 1panel-network 以容器名访问 New API / PostgreSQL
+    networks:
+      - 1panel-network
+
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 512M
+        reservations:
+          memory: 128M
+
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/ctx/stats"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+    stop_grace_period: 40s
+
+networks:
+  1panel-network:
+    external: true
