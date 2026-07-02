@@ -1,0 +1,39 @@
+# ===== 阶段 1: 前端构建 =====
+FROM node:20-alpine AS web-builder
+
+WORKDIR /web
+COPY web/package.json web/pnpm-lock.yaml* ./
+RUN corepack enable && pnpm install --frozen-lockfile || pnpm install
+COPY web/ ./
+RUN pnpm build
+
+# ===== 阶段 2: 后端编译(含前端 embed) =====
+FROM golang:1.25-alpine AS go-builder
+
+RUN apk add --no-cache ca-certificates git
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+# 把前端构建产物复制到 embed 目录
+COPY --from=web-builder /web/dist ./internal/platform/web_dist/
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -trimpath -ldflags "-s -w" \
+    -o /platform ./cmd/platform
+
+# ===== 阶段 3: 运行 =====
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates tzdata && \
+    adduser -D -u 10001 app
+
+COPY --from=go-builder /platform /usr/local/bin/platform
+
+USER app
+WORKDIR /app
+EXPOSE 8088
+
+ENTRYPOINT ["/usr/local/bin/platform"]

@@ -1,0 +1,27 @@
+# 平台后端部署(独立于网关, 见 docs/PLATFORM_DESIGN.md)
+services:
+  platform:
+    image: llm-platform:local
+    container_name: llm-platform
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8088:8088"
+    environment:
+      - PLATFORM_LISTEN_ADDR=:8088
+      # 沉淀库(与网关共用 PG, 用容器名; 真实密码见 .env.deploy)
+      - PLATFORM_DB_URL=postgres://user_admin:${PG_PASSWORD}@1Panel-postgresql-AWYE:5432/llm_gateway?sslmode=disable
+      # 鉴权 token(留空=免鉴权, 生产建议设置)
+      - PLATFORM_AUTH_TOKEN=
+      - PLATFORM_DB_MAX_OPEN_CONNS=5
+      - PLATFORM_TIMEZONE=Asia/Shanghai
+      - PLATFORM_LOG_LEVEL=info
+    networks:
+      - 1panel-network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+networks:
+  1panel-network:
+    external: true

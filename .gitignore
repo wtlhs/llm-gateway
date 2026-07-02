@@ -13,6 +13,10 @@ vendor/
 .env.*.local
 dist/
 
+# 前端构建产物与依赖
+web/node_modules/
+web/dist/
+
 # IDE
 .vscode/
 .idea/
@@ -22,3 +26,4 @@ dist/
 .DS_Store
 Thumbs.db
 llm-gateway.tar
+web/tsconfig.tsbuildinfo
