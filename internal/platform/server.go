@@ -92,14 +92,19 @@ func (s *Server) staticHandler() http.Handler {
 }
 
 // authMiddleware Bearer Token 鉴权。token 为空时跳过(本地开发友好)。
+// 支持 Authorization: Bearer 头 和 ?token= 查询参数(后者用于 window.open 导出场景)。
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.AuthToken == "" {
 			next.ServeHTTP(w, r) // 无 token 配置, 放行(内网/开发场景)
 			return
 		}
-		bearer := extractBearer(r)
-		if bearer != s.cfg.AuthToken {
+		// 优先 Bearer 头, 回退查询参数
+		cred := extractBearer(r)
+		if cred == "" {
+			cred = r.URL.Query().Get("token")
+		}
+		if cred != s.cfg.AuthToken {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
