@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -47,7 +48,7 @@ func testConfig() *config.Config {
 		ContextDBURL:        "postgres://test/test",
 		NewAPIB_URL:         "postgres://test/test",
 		AuditMode:           config.ModeRedact,
-		CaptureEndpointsCSV: "chat/completions,completions,responses,embeddings,moderations",
+		CaptureEndpointsCSV: "chat/completions,completions,responses,embeddings,moderations,messages",
 		MaxBodyBytes:        65536,
 		PreBodyMaxBytes:     33554432,
 		TTLDays:             90,
@@ -489,5 +490,192 @@ func TestE2E_GzipRequest_Captured(t *testing.T) {
 	content := msgs[0].(map[string]any)["content"].(string)
 	if content != "compressed hi" {
 		t.Errorf("decoded content = %q, want 'compressed hi'", content)
+	}
+}
+
+// ============================================================
+// 测试 8: Anthropic 非流式 /v1/messages → 正确解析 + usage 映射
+// 验证: endpoint=messages 时用 Anthropic 解析器, content/usage 正确提取
+// ============================================================
+func TestE2E_Anthropic_NonStream(t *testing.T) {
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Oneapi-Request-Id", "anth-ns-1")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		io.WriteString(w, `{
+			"id":"msg_1","type":"message","role":"assistant","model":"claude-3",
+			"content":[{"type":"text","text":"Hello from Claude"}],
+			"usage":{"input_tokens":42,"output_tokens":7},
+			"stop_reason":"end_turn"
+		}`)
+	})
+
+	proxy, _, spy, _ := newTestGateway(t, upstream)
+
+	// Anthropic 请求: system 在顶层, messages 里无 system role
+	body := `{"model":"claude-3","max_tokens":100,"system":"You are helpful","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-anth-test")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	// 客户端应收到原始 Anthropic 响应(透传不改)
+	clientResp := rec.Body.String()
+	if !strings.Contains(clientResp, "Hello from Claude") {
+		t.Errorf("response not forwarded: %s", clientResp)
+	}
+
+	recs := waitForRecord(t, spy, 1)
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(recs))
+	}
+	got := recs[0]
+	if got.Endpoint != "messages" {
+		t.Errorf("endpoint=%q, want messages", got.Endpoint)
+	}
+	// usage 映射: input_tokens→prompt_tokens, output_tokens→completion_tokens
+	if got.PromptTokens != 42 || got.CompletionTokens != 7 {
+		t.Errorf("tokens=%d/%d, want 42/7", got.PromptTokens, got.CompletionTokens)
+	}
+	// completion 归一化为 OpenAI 形态
+	var comp map[string]any
+	if err := json.Unmarshal(got.CompletionText, &comp); err != nil {
+		t.Fatalf("completion not json: %v", err)
+	}
+	content := comp["choices"].([]any)[0].(map[string]any)["message"].(map[string]any)["content"].(string)
+	if content != "Hello from Claude" {
+		t.Errorf("content=%q, want 'Hello from Claude'", content)
+	}
+}
+
+// ============================================================
+// 测试 9: Anthropic 流式 /v1/messages → SSE 聚合 + usage 映射
+// ============================================================
+func TestE2E_Anthropic_Stream(t *testing.T) {
+	chunks := []string{
+		`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":50,"output_tokens":1}}}` + "\n\n",
+		`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n",
+		`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Streamed"}}` + "\n\n",
+		`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" response"}}` + "\n\n",
+		`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":0}` + "\n\n",
+		`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":12}}` + "\n\n",
+		`event: message_stop` + "\n" + `data: {"type":"message_stop"}` + "\n\n",
+	}
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		flusher, _ := w.(http.Flusher)
+		for _, c := range chunks {
+			io.WriteString(w, c)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	})
+
+	proxy, _, spy, _ := newTestGateway(t, upstream)
+
+	body := `{"model":"claude-3","max_tokens":100,"stream":true,"messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-anth-stream")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	// 客户端应收到原始 SSE(透传)
+	clientBody := rec.Body.String()
+	if !strings.Contains(clientBody, "Streamed") {
+		t.Errorf("stream not forwarded: %s", clientBody)
+	}
+
+	recs := waitForRecord(t, spy, 1)
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(recs))
+	}
+	got := recs[0]
+	if !got.IsStream {
+		t.Error("expected is_stream=true")
+	}
+	// usage 映射
+	if got.PromptTokens != 50 || got.CompletionTokens != 12 {
+		t.Errorf("tokens=%d/%d, want 50/12", got.PromptTokens, got.CompletionTokens)
+	}
+	// 聚合内容
+	var comp map[string]any
+	json.Unmarshal(got.CompletionText, &comp)
+	content := comp["choices"].([]any)[0].(map[string]any)["message"].(map[string]any)["content"].(string)
+	if content != "Streamed response" {
+		t.Errorf("content=%q, want 'Streamed response'", content)
+	}
+}
+
+// ============================================================
+// 测试 10: 大请求体(200KB)不被截断(MaxBodyBytes=1MB 回归)
+// 验证: 之前 64KB 截断导致 76% 数据损坏, 修复后大请求完整落库
+// ============================================================
+func TestE2E_LargeBody_NotTruncated(t *testing.T) {
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	})
+
+	// 构造大请求体: 200KB 的 system prompt
+	bigContent := strings.Repeat("Go语言是一种静态强类型编程语言。", 5000) // ~200KB
+	bigBody := fmt.Sprintf(`{"model":"glm-5.2","messages":[{"role":"system","content":%q},{"role":"user","content":"总结"}]}`, bigContent)
+
+	// 用大 MaxBodyBytes 的专用配置
+	upSrv := httptest.NewServer(upstream)
+	defer upSrv.Close()
+	cfg := testConfig()
+	cfg.NewAPIBaseURL = upSrv.URL
+	cfg.MaxBodyBytes = 1048576 // 1MB
+
+	spy := &mockPersister{}
+	callers := audit.NewNoopCallerCache()
+	pipeline := audit.NewPipeline(cfg, spy, callers)
+	pipeline.Start(context.Background())
+	defer pipeline.Shutdown(context.Background())
+	transport := NewCaptureTransportExposed(TransportConfig{Base: http.DefaultTransport, Pipeline: pipeline, Cfg: cfg})
+	proxy := NewProxy(transport, cfg.NewAPIBaseURL, cfg.MaxBodyBytes)
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(bigBody))
+	req.Header.Set("Authorization", "Bearer sk-big-body")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	recs := waitForRecord(t, spy, 1)
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(recs))
+	}
+	got := recs[0]
+	// 关键: 不应被截断
+	if got.Truncated {
+		t.Error("200KB body should NOT be truncated with MaxBodyBytes=1MB")
+	}
+	// prompt 应是合法 JSON(非 {"raw":...} 降级)
+	var prompt map[string]any
+	if err := json.Unmarshal(got.PromptText, &prompt); err != nil {
+		t.Fatalf("prompt not valid json (downgraded?): %v", err)
+	}
+	// user 消息应存在(之前截断 bug 导致看不到 user)
+	msgs := prompt["messages"].([]any)
+	if len(msgs) < 2 {
+		t.Fatalf("expected 2 messages, got %d (truncated?)", len(msgs))
+	}
+	userMsg := msgs[1].(map[string]any)
+	if userMsg["role"] != "user" {
+		t.Errorf("second message role=%v, want user", userMsg["role"])
 	}
 }
