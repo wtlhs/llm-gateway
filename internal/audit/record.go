@@ -36,6 +36,12 @@ type Record struct {
 	ToolCalls      json.RawMessage
 	RequestBodyHash string
 
+	// 知识资产层引用(docs/KNOWLEDGE_LAYER.md §3.2)
+	SystemPromptHash   string // sha256(content), 老数据为空
+	SystemPromptSize   int    // system prompt 字节数
+	SystemPromptText   string // system prompt 原文(供 pipeline upsert, 不落库到本表)
+	SystemPromptAgent  string // 启发式提取的 agent 名(供 pipeline upsert)
+
 	// 状态
 	HTTPStatus       int
 	PromptTokens     int32
@@ -89,14 +95,30 @@ func isAnthropicEndpoint(endpoint string) bool {
 
 // SetPrompt 在请求 body 捕获后(§5.1.3)填充 prompt。
 // decoded 是解压后的请求体字节; truncated 表示是否触发 postBodyMaxBytes 截断。
+// 同时做 system prompt 分流(知识资产层, docs/KNOWLEDGE_LAYER.md §4.1):
+// 从请求体提取 system prompt → 单独存(供 pipeline upsert 到 system_prompts 表),
+// prompt_text 只保留 user/assistant/tool 消息。
 func (rec *Record) SetPrompt(decoded []byte, truncated bool) {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
-	rec.PromptText = json.RawMessage(safeJSON(decoded))
+
+	// system 分流: 若是合法 JSON 且含 system, 提取并精简请求体
+	slimmed, sys := splitSystemPrompt(decoded)
+	if sys.Has {
+		rec.SystemPromptText = sys.Content
+		rec.SystemPromptSize = len(sys.Content)
+		rec.SystemPromptHash = sha256Hex([]byte(sys.Content))
+		rec.SystemPromptAgent = extractAgentName(sys.Content, rec.CallerTag)
+		// request_body_hash 用原始请求体(完整, 含 system), 保证语义不变
+		rec.RequestBodyHash = sha256Hex(decoded)
+	} else {
+		rec.RequestBodyHash = sha256Hex(decoded)
+	}
+
+	rec.PromptText = json.RawMessage(safeJSON(slimmed))
 	rec.Truncated = truncated
-	rec.RequestBodyHash = sha256Hex(decoded)
-	// 顺便从 prompt 中提取 model / is_stream(若尚未确定)
-	rec.extractPromptMeta(decoded)
+	// 从(精简后的)prompt 提取 model / is_stream
+	rec.extractPromptMeta(slimmed)
 }
 
 // extractPromptMeta 从请求体里尽力提取 model 字段(用于落库 + 限流旁路)。
@@ -251,6 +273,10 @@ func (rec *Record) StripContent() *Record {
 		Truncated:         rec.Truncated,
 		UpstreamLatencyMs: rec.UpstreamLatencyMs,
 		TotalLatencyMs:    rec.TotalLatencyMs,
+		// 知识资产层引用保留(hash 指向 system_prompts, 即使正文丢弃仍可还原)
+		SystemPromptHash: rec.SystemPromptHash,
+		SystemPromptSize: rec.SystemPromptSize,
+		// SystemPromptText 丢弃(降级副本不重存 system 原文)
 	}
 }
 

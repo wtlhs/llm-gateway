@@ -41,6 +41,10 @@ type Conversation struct {
 	Truncated         bool
 	UpstreamLatencyMs int32
 	TotalLatencyMs    int32
+
+	// 知识资产层引用(docs/KNOWLEDGE_LAYER.md §3.2)
+	SystemPromptHash string // 引用 system_prompts.hash, 老数据为空
+	SystemPromptSize int    // system prompt 字节数, 便于统计
 	Version           int16
 	CreatedAt         time.Time
 }
@@ -92,8 +96,8 @@ INSERT INTO llm_conversation (
     token_key_hash, model, endpoint, is_stream, prompt_text, completion_text,
     tool_calls, request_body_hash, http_status, prompt_tokens, completion_tokens,
     error_message, client_ip, redacted, truncated, upstream_latency_ms,
-    total_latency_ms, version
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,1)
+    total_latency_ms, version, system_prompt_hash, system_prompt_size
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,1,$23,$24)
 ON CONFLICT (request_id) DO NOTHING
 RETURNING id;`
 	tag, err := s.pool.Exec(ctx, sql,
@@ -104,6 +108,7 @@ RETURNING id;`
 		nullable(c.RequestBodyHash), c.HTTPStatus, c.PromptTokens, c.CompletionTokens,
 		nullable(c.ErrorMessage), nullable(c.ClientIP), c.Redacted, c.Truncated,
 		c.UpstreamLatencyMs, c.TotalLatencyMs,
+		nullable(c.SystemPromptHash), nullableInt(c.SystemPromptSize),
 	)
 	if err != nil {
 		return err
@@ -176,6 +181,61 @@ func nullableJSON(b json.RawMessage) any {
 		return nil
 	}
 	return []byte(b)
+}
+
+// nullableInt 把 0 转为 NULL(system_prompt_size=0 表示无 system, 存 NULL 更语义化)。
+func nullableInt(n int) any {
+	if n == 0 {
+		return nil
+	}
+	return n
+}
+
+// SystemPrompt 对应 system_prompts 表的一行(知识资产层, docs/KNOWLEDGE_LAYER.md §3.1)。
+type SystemPrompt struct {
+	Hash       string // sha256(content), 主键
+	AgentName  string // 启发式提取的 agent 名
+	Content    string // 完整 system prompt 原文
+	Size       int    // 字节数
+	Tokens     int    // token 数(首次观测值, 可空)
+}
+
+// UpsertSystemPrompt 插入或更新 system prompt(幂等去重)。
+// 首次: INSERT content + agent_name + first_seen + use_count=1
+// 重复: UPDATE last_seen + use_count+1 + caller_tags 去重追加
+// 对应 docs/KNOWLEDGE_LAYER.md §4.2。
+func (s *Store) UpsertSystemPrompt(ctx context.Context, sp *SystemPrompt, callerTag string) error {
+	const sql = `
+INSERT INTO system_prompts (hash, agent_name, content, content_size, first_seen, last_seen, use_count, caller_tags)
+VALUES ($1, $2, $3, $4, now(), now(), 1, CASE WHEN $5 = '' THEN '{}' ELSE ARRAY[$5] END)
+ON CONFLICT (hash) DO UPDATE
+SET last_seen = now(),
+    use_count = system_prompts.use_count + 1,
+    caller_tags = CASE
+        WHEN $5 = '' OR $5 = ANY(system_prompts.caller_tags) THEN system_prompts.caller_tags
+        ELSE array_append(system_prompts.caller_tags, $5)
+    END`
+	_, err := s.pool.Exec(ctx, sql,
+		sp.Hash, nullable(sp.AgentName), sp.Content, sp.Size, nullable(callerTag))
+	return err
+}
+
+// DeleteColdSystemPrompts 清理冷门 system prompt(冷数据归档, docs/KNOWLEDGE_LAYER.md §6.4)。
+// 删除 use_count 低且长期未活跃的, 但保留有演进后继的(prev_hash 引用链)。
+// 返回删除行数。
+func (s *Store) DeleteColdSystemPrompts(ctx context.Context, minUseCount int, inactiveDays int) (int64, error) {
+	const sql = `
+DELETE FROM system_prompts
+WHERE use_count <= $1
+  AND last_seen < now() - make_interval(days => $2)
+  AND hash NOT IN (
+      SELECT prev_hash FROM system_prompts WHERE prev_hash IS NOT NULL
+  )`
+	tag, err := s.pool.Exec(ctx, sql, minUseCount, inactiveDays)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // 防止未使用 import 报错(pgx 用于未来 RowScan 场景保留)。

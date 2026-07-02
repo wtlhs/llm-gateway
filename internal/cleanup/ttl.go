@@ -40,6 +40,15 @@ func Run(ctx context.Context, store *db.Store, ttlDays int) {
 		if n > 0 {
 			slog.Info("ttl cleanup done", "deleted", n, "cutoff", cutoff.Format(time.RFC3339))
 		}
+
+		// 冷数据归档: 清理冷门 system prompt(docs/KNOWLEDGE_LAYER.md §6.4)。
+		// use_count<=3 且 90 天未活跃, 但保留有演进后继的。
+		coldN, err := store.DeleteColdSystemPrompts(ctx, 3, 90)
+		if err != nil {
+			slog.Warn("system prompt cold cleanup failed", "err", err)
+		} else if coldN > 0 {
+			slog.Info("system prompt cold cleanup done", "deleted", coldN)
+		}
 	}
 
 	for {

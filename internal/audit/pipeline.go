@@ -20,6 +20,13 @@ type Persister interface {
 	Insert(ctx context.Context, c *db.Conversation) error
 }
 
+// SystemPromptPersister 是可选的知识资产层落库能力(docs/KNOWLEDGE_LAYER.md §4)。
+// Pipeline 通过类型断言检测: 若 store 实现了该接口, 则 upsert system prompt;
+// 否则(如 mock)跳过, 不影响现有测试。
+type SystemPromptPersister interface {
+	UpsertSystemPrompt(ctx context.Context, sp *db.SystemPrompt, callerTag string) error
+}
+
 // Pipeline 是 capture → 落库的异步管道。
 // 设计依据 DESIGN.md §5.3: 双 channel 分级背压(I4) + M1 时序(响应阶段才 push)。
 type Pipeline struct {
@@ -145,10 +152,26 @@ func (p *Pipeline) drainMeta(ctx context.Context) {
 	}
 }
 
-// persist: enrich → redact → truncate → insert(DESIGN.md §5.3)。
+// persist: enrich → upsert system → redact → insert(DESIGN.md §5.3 + KNOWLEDGE_LAYER §4)。
 func (p *Pipeline) persist(ctx context.Context, rec *Record) {
 	p.callers.Enrich(rec)
 	Apply(rec, p.cfg.AuditMode)
+
+	// 知识资产层: 若有 system prompt 且 store 支持则 upsert(去重存 1 份)。
+	// 失败不阻塞对话落库(system 沉淀是增强, 非必须)。
+	if rec.SystemPromptHash != "" && rec.SystemPromptText != "" {
+		if spp, ok := p.store.(SystemPromptPersister); ok {
+			sp := &db.SystemPrompt{
+				Hash:      rec.SystemPromptHash,
+				AgentName: rec.SystemPromptAgent,
+				Content:   rec.SystemPromptText,
+				Size:      rec.SystemPromptSize,
+			}
+			if err := spp.UpsertSystemPrompt(ctx, sp, rec.CallerTag); err != nil {
+				p.warnOnce("system prompt upsert failed", "err", err)
+			}
+		}
+	}
 
 	start := time.Now()
 	err := p.store.Insert(ctx, toDBRecord(rec))
@@ -213,6 +236,8 @@ func toDBRecord(rec *Record) *db.Conversation {
 		Truncated:         rec.Truncated,
 		UpstreamLatencyMs: rec.UpstreamLatencyMs,
 		TotalLatencyMs:    rec.TotalLatencyMs,
+		SystemPromptHash:  rec.SystemPromptHash,
+		SystemPromptSize:  rec.SystemPromptSize,
 	}
 }
 
