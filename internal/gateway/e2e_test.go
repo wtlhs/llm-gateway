@@ -257,6 +257,118 @@ func TestE2E_Stream_AggregatedAndForwarded(t *testing.T) {
 }
 
 // ============================================================
+// 测试 6: 流式请求 → 网关注入 stream_options.include_usage=true 给上游
+// 验证: 经网关转发后, 上游收到的 body 必含 include_usage=true,
+// 从而上游会在最后一帧下发 usage(修复 token 计量 80% 丢失)。
+// ============================================================
+func TestE2E_Stream_IncludeUsageInjected(t *testing.T) {
+	var upstreamReceivedBody string
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		upstreamReceivedBody = string(raw)
+		// 上游回一个含 usage 的流(模拟注入生效后上游的真实行为)
+		chunks := []string{
+			`data: {"choices":[{"delta":{"content":"ok"}}]}` + "\n\n",
+			`data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}` + "\n\n",
+			`data: [DONE]` + "\n\n",
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		flusher, _ := w.(http.Flusher)
+		for _, c := range chunks {
+			io.WriteString(w, c)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	})
+
+	proxy, _, spy, _ := newTestGateway(t, upstream)
+
+	// 客户端发的原始 body: 流式但没带 stream_options
+	body := `{"model":"glm-5.2","stream":true,"messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-inject-test")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("status = %d", rec.Code)
+	}
+
+	// 断言 1: 上游收到的 body 必含 include_usage=true(注入生效)
+	var upstreamBody map[string]any
+	if err := json.Unmarshal([]byte(upstreamReceivedBody), &upstreamBody); err != nil {
+		t.Fatalf("上游收到非法 JSON: %v body=%s", err, upstreamReceivedBody)
+	}
+	so, ok := upstreamBody["stream_options"].(map[string]any)
+	if !ok {
+		t.Fatalf("上游收到的 body 缺 stream_options: %s", upstreamReceivedBody)
+	}
+	if so["include_usage"] != true {
+		t.Errorf("上游 body 的 include_usage=%v, want true", so["include_usage"])
+	}
+
+	// 断言 2: 原字段保留(model/stream/messages)
+	if upstreamBody["model"] != "glm-5.2" {
+		t.Errorf("注入后 model 丢失: %v", upstreamBody["model"])
+	}
+
+	// 断言 3: 落库的 prompt 也含 stream_options(一致性)
+	recs := waitForRecord(t, spy, 1)
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(recs))
+	}
+	var storedPrompt map[string]any
+	if err := json.Unmarshal(recs[0].PromptText, &storedPrompt); err != nil {
+		t.Fatalf("落库 prompt 非法 JSON: %v", err)
+	}
+	if so2, ok := storedPrompt["stream_options"].(map[string]any); !ok || so2["include_usage"] != true {
+		t.Errorf("落库 prompt 缺 include_usage=true: %s", recs[0].PromptText)
+	}
+
+	// 断言 4: usage 被正确采集(因为上游回的是含 usage 的流)
+	if recs[0].PromptTokens != 10 || recs[0].CompletionTokens != 5 {
+		t.Errorf("usage tokens = %d/%d, want 10/5", recs[0].PromptTokens, recs[0].CompletionTokens)
+	}
+}
+
+// ============================================================
+// 测试 7: 客户端已带 include_usage=true → 网关幂等, 不重复改写
+// ============================================================
+func TestE2E_Stream_IncludeUsageIdempotent(t *testing.T) {
+	var upstreamReceivedBody string
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		upstreamReceivedBody = string(raw)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		io.WriteString(w, `data: [DONE]`+"\n\n")
+	})
+
+	proxy, _, _, _ := newTestGateway(t, upstream)
+
+	// 客户端已带 stream_options.include_usage=true
+	body := `{"model":"x","stream":true,"stream_options":{"include_usage":true},"messages":[]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-idempotent")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+
+	// 上游收到的 body 应仍是合法 JSON 且 include_usage 仍为 true(未被破坏)
+	var upstreamBody map[string]any
+	if err := json.Unmarshal([]byte(upstreamReceivedBody), &upstreamBody); err != nil {
+		t.Fatalf("上游收到非法 JSON(幂等改写破坏了 body): %v body=%s", err, upstreamReceivedBody)
+	}
+	so := upstreamBody["stream_options"].(map[string]any)
+	if so["include_usage"] != true {
+		t.Errorf("幂等后 include_usage=%v, want true", so["include_usage"])
+	}
+}
+
+// ============================================================
 // 测试 3: 白名单外端点(images)→ 纯透传不捕获
 // ============================================================
 func TestE2E_NonWhitelisted_NotCaptured(t *testing.T) {

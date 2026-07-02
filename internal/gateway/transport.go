@@ -90,7 +90,13 @@ func (t *captureTransport) Forward(r *http.Request) (*http.Response, *audit.Reco
 				rec.Truncated = true
 			}
 		} else if len(snap.decoded) > 0 {
-			rec.SetPrompt(snap.decoded, snap.truncated) // 内部修正 IsStream + Model
+			// 流式请求注入 stream_options.include_usage=true(否则上游不下发 usage, 计量丢失)。
+			// 注入会改写 snap.raw, 需用新 raw 重新还原 r.Body 给上游转发。
+			enc := r.Header.Get("Content-Encoding")
+			if injectIncludeUsage(&snap, enc) {
+				restoreBody(r, snap.raw) // 用注入后的新字节重置 r.Body
+			}
+			rec.SetPrompt(snap.decoded, snap.truncated) // 落库用注入后的 decoded(含 stream_options)
 		}
 	}
 
