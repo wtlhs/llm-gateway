@@ -31,8 +31,8 @@ type Config struct {
 	// 审计
 	AuditMode            Mode   `envconfig:"LLM_AUDIT_MODE" default:"redact"`
 	AuditExcludeModels   string `envconfig:"LLM_AUDIT_EXCLUDE_MODELS" default:""`
-	CaptureEndpointsCSV  string `envconfig:"LLM_AUDIT_CAPTURE_ENDPOINTS" default:"chat/completions,completions,responses,embeddings,moderations"`
-	MaxBodyBytes         int64  `envconfig:"LLM_AUDIT_MAX_BODY_BYTES" default:"65536"`
+	CaptureEndpointsCSV  string `envconfig:"LLM_AUDIT_CAPTURE_ENDPOINTS" default:"chat/completions,completions,responses,embeddings,moderations,messages"`
+	MaxBodyBytes         int64  `envconfig:"LLM_AUDIT_MAX_BODY_BYTES" default:"1048576"` // 1MB: 覆盖 coding agent 超长 system prompt + 工具定义
 	PreBodyMaxBytes      int64  `envconfig:"LLM_AUDIT_PRE_BODY_MAX_BYTES" default:"33554432"` // 32MB
 	TTLDays              int    `envconfig:"LLM_AUDIT_TTL_DAYS" default:"90"`
 
