@@ -1,5 +1,4 @@
 // API 客户端: 封装所有后端请求。
-// Token 从 localStorage 读取(首次访问时让用户输入, 或 URL ?token=xxx 带入)。
 
 const TOKEN_KEY = 'platform_token'
 
@@ -34,7 +33,15 @@ async function request<T>(path: string, params?: Record<string, any>): Promise<T
   return json
 }
 
-// --- 类型定义 ---
+// --- 通用类型 ---
+
+interface ApiResp<T> { code: number; data: T }
+
+export interface ListResp<T> {
+  code: number; total: number; page: number; size: number; list: T[]
+}
+
+// --- Dashboard ---
 
 export interface Overview {
   total: number
@@ -52,76 +59,96 @@ export interface TrendPoint {
   completion_tokens: number
 }
 
-export interface DimensionCount {
-  key: string
-  count: number
-  tokens: number
+export interface DimensionCount { key: string; count: number; tokens: number }
+
+export interface HourlyPoint { hour: number; count: number }
+
+export interface EndpointStat { endpoint: string; count: number; stream_pct: number }
+
+export interface ModelStat {
+  model: string; count: number
+  avg_prompt: number; avg_completion: number; avg_latency: number
 }
 
+// --- Conversations ---
+
 export interface ConversationSummary {
-  id: number
-  model: string
-  endpoint: string
-  caller_tag: string
-  is_stream: boolean
-  http_status: number
-  prompt_tokens: number
-  completion_tokens: number
-  upstream_latency_ms: number
-  system_prompt_hash?: string
-  truncated: boolean
-  created_at: string
+  id: number; model: string; endpoint: string; caller_tag: string
+  is_stream: boolean; http_status: number
+  prompt_tokens: number; completion_tokens: number
+  upstream_latency_ms: number; system_prompt_hash?: string
+  truncated: boolean; created_at: string
 }
 
 export interface ConversationDetail {
-  id: number
-  model: string
-  endpoint: string
-  caller_tag: string
-  is_stream: boolean
-  http_status: number
-  prompt_text: any
-  completion_text: any
-  tool_calls?: any
-  prompt_tokens: number
-  completion_tokens: number
-  error_message?: string
-  upstream_latency_ms: number
-  system_prompt_hash?: string
-  client_ip?: string
-  created_at: string
+  id: number; model: string; endpoint: string; caller_tag: string
+  is_stream: boolean; http_status: number
+  prompt_text: any; completion_text: any; tool_calls?: any
+  prompt_tokens: number; completion_tokens: number
+  error_message?: string; upstream_latency_ms: number
+  system_prompt_hash?: string; client_ip?: string; created_at: string
 }
 
-export interface ListResp<T> {
-  code: number
-  total: number
-  page: number
-  size: number
-  list: T[]
-}
+// --- Knowledge ---
 
 export interface SystemPromptSummary {
-  hash: string
-  agent_name: string
-  use_count: number
-  content_size: number
-  first_seen: string
-  last_seen: string
+  hash: string; agent_name: string; use_count: number
+  content_size: number; first_seen: string; last_seen: string
+}
+
+export interface KnowledgeStats {
+  total_configs: number; total_usage: number; unique_agents: number
+  top_agent: string; top_agent_uses: number; avg_config_size: number
+}
+
+// --- Ops ---
+
+export interface DBStats {
+  conv_table_size: string; conv_index_size: string
+  sys_prompt_count: number; sys_prompt_size: string
+  live_tuples: number; dead_tuples: number
+  last_vacuum: string; last_analyze: string; total_db_size: string
+}
+
+export interface LatencyBucket { bucket: string; count: number }
+
+export interface DataQuality {
+  total: number; with_usage: number; with_caller: number
+  with_sys_prompt: number; truncated: number; errors: number; stream_pct: number
 }
 
 // --- API 方法 ---
 
 export const api = {
-  overview: () => request<{ data: Overview }>('/api/v1/dashboard/overview'),
-  trend: (days: number) => request<{ data: TrendPoint[] }>('/api/v1/dashboard/trend', { days }),
-  topModels: (limit: number) => request<{ data: DimensionCount[] }>('/api/v1/dashboard/top-models', { limit }),
-  topCallers: (limit: number) => request<{ data: DimensionCount[] }>('/api/v1/dashboard/top-callers', { limit }),
+  // Dashboard
+  overview: () => request<ApiResp<Overview>>('/api/v1/dashboard/overview'),
+  trend: (days: number) => request<ApiResp<TrendPoint[]>>('/api/v1/dashboard/trend', { days }),
+  topModels: (limit: number) => request<ApiResp<DimensionCount[]>>('/api/v1/dashboard/top-models', { limit }),
+  topCallers: (limit: number) => request<ApiResp<DimensionCount[]>>('/api/v1/dashboard/top-callers', { limit }),
+  hourly: () => request<ApiResp<HourlyPoint[]>>('/api/v1/dashboard/hourly'),
+  endpoints: () => request<ApiResp<EndpointStat[]>>('/api/v1/dashboard/endpoints'),
+  modelStats: () => request<ApiResp<ModelStat[]>>('/api/v1/dashboard/model-stats'),
 
-  conversations: (params: { page?: number; size?: number; model?: string; caller?: string }) =>
+  // Conversations
+  conversations: (params: { page?: number; size?: number; model?: string; caller?: string; stream?: string }) =>
     request<ListResp<ConversationSummary>>('/api/v1/conversations', params),
-  conversation: (id: number) => request<{ data: ConversationDetail }>(`/api/v1/conversations/${id}`),
+  conversation: (id: number) => request<ApiResp<ConversationDetail>>(`/api/v1/conversations/${id}`),
+  exportUrl: (params: { model?: string; caller?: string }) => {
+    const url = new URL('/api/v1/conversations/export', window.location.origin)
+    Object.entries(params).forEach(([k, v]) => { if (v) url.searchParams.set(k, v) })
+    const token = getToken()
+    if (token) url.searchParams.set('token', token) // export via GET with token query (simplified)
+    return url.toString()
+  },
 
+  // Knowledge
   configs: (params: { page?: number; size?: number }) =>
     request<ListResp<SystemPromptSummary>>('/api/v1/knowledge/configs', params),
-  config: (hash: string) => request<{ data: any }>(`/api/v1/knowledge/configs/${hash}`),
+  config: (hash: string) => request<ApiResp<any>>(`/api/v1/knowledge/configs/${hash}`),
+  knowledgeStats: () => request<ApiResp<KnowledgeStats>>('/api/v1/knowledge/stats'),
+
+  // Ops
+  dbStats: () => request<ApiResp<DBStats>>('/api/v1/ops/db-stats'),
+  dataQuality: () => request<ApiResp<DataQuality>>('/api/v1/ops/data-quality'),
+  latency: () => request<ApiResp<LatencyBucket[]>>('/api/v1/ops/latency'),
 }

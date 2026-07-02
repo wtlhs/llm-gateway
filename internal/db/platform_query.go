@@ -321,7 +321,254 @@ func (s *Store) GetSystemPrompt(ctx context.Context, hash string) (content, agen
 	return
 }
 
-// itoa 简单整数转字符串(避免引入 strconv 到查询路径的歧义, 实际可直接用 fmt 或 strconv)。
+// --- 运维监控查询 ---
+
+// DBStats 数据库表统计(运维监控用)。
+type DBStats struct {
+	ConvTableSize   string `json:"conv_table_size"`   // 人类可读
+	ConvIndexSize   string `json:"conv_index_size"`
+	SysPromptCount  int64  `json:"sys_prompt_count"`
+	SysPromptSize   string `json:"sys_prompt_size"`
+	LiveTuples      int64  `json:"live_tuples"`
+	DeadTuples      int64  `json:"dead_tuples"`
+	LastVacuum      string `json:"last_vacuum"`
+	LastAnalyze     string `json:"last_analyze"`
+	TotalDBSize     string `json:"total_db_size"`
+}
+
+// GetDBStats 返回数据库表大小/元组/维护状态。
+func (s *Store) GetDBStats(ctx context.Context) (*DBStats, error) {
+	const sql = `
+SELECT
+  pg_size_pretty(pg_total_relation_size('llm_conversation')),
+  pg_size_pretty(pg_indexes_size('llm_conversation')),
+  coalesce((SELECT count(*) FROM system_prompts), 0),
+  pg_size_pretty(coalesce((SELECT pg_total_relation_size('system_prompts')), 0)),
+  coalesce(s.n_live_tup, 0),
+  coalesce(s.n_dead_tup, 0),
+  coalesce(to_char(s.last_vacuum, 'YYYY-MM-DD HH24:MI'), 'never'),
+  coalesce(to_char(s.last_analyze, 'YYYY-MM-DD HH24:MI'), 'never'),
+  pg_size_pretty(pg_database_size(current_database()))
+FROM pg_stat_user_tables s WHERE s.relname = 'llm_conversation'`
+	var d DBStats
+	err := s.pool.QueryRow(ctx, sql).Scan(
+		&d.ConvTableSize, &d.ConvIndexSize, &d.SysPromptCount, &d.SysPromptSize,
+		&d.LiveTuples, &d.DeadTuples, &d.LastVacuum, &d.LastAnalyze, &d.TotalDBSize)
+	if err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+// LatencyBucket 延迟分布区间。
+type LatencyBucket struct {
+	Bucket string `json:"bucket"`
+	Count  int64  `json:"count"`
+}
+
+// LatencyDistribution 延迟分布(按区间统计)。
+func (s *Store) LatencyDistribution(ctx context.Context) ([]LatencyBucket, error) {
+	const sql = `
+SELECT width_bucket(upstream_latency_ms, 0, 30000, 6) AS b, count(*) AS c
+FROM llm_conversation WHERE upstream_latency_ms IS NOT NULL
+GROUP BY b ORDER BY b`
+	rows, err := s.pool.Query(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	labels := []string{"<5s", "5-10s", "10-15s", "15-20s", "20-25s", "25-30s"}
+	out := make([]LatencyBucket, 0, 6)
+	for rows.Next() {
+		var b, c int
+		if err := rows.Scan(&b, &c); err != nil {
+			return nil, err
+		}
+		label := "30s+"
+		if b >= 1 && b <= 6 {
+			label = labels[b-1]
+		}
+		out = append(out, LatencyBucket{Bucket: label, Count: int64(c)})
+	}
+	return out, rows.Err()
+}
+
+// DataQuality 数据质量指标。
+type DataQuality struct {
+	Total         int64 `json:"total"`
+	WithUsage     int64 `json:"with_usage"`     // prompt_tokens>0
+	WithCaller    int64 `json:"with_caller"`    // caller_tag非空
+	WithSysPrompt int64 `json:"with_sys_prompt"`
+	Truncated     int64 `json:"truncated"`
+	Errors        int64 `json:"errors"`
+	StreamPct     int   `json:"stream_pct"`     // 流式占比
+}
+
+// GetDataQuality 数据完整性统计(检测采集质量)。
+func (s *Store) GetDataQuality(ctx context.Context) (*DataQuality, error) {
+	const sql = `
+SELECT count(*),
+  count(*) FILTER (WHERE prompt_tokens > 0),
+  count(*) FILTER (WHERE caller_tag IS NOT NULL),
+  count(*) FILTER (WHERE system_prompt_hash IS NOT NULL),
+  count(*) FILTER (WHERE truncated = true),
+  count(*) FILTER (WHERE http_status >= 400),
+  coalesce(avg(CASE WHEN is_stream THEN 100 ELSE 0 END), 0)::int
+FROM llm_conversation`
+	var d DataQuality
+	err := s.pool.QueryRow(ctx, sql).Scan(
+		&d.Total, &d.WithUsage, &d.WithCaller, &d.WithSysPrompt,
+		&d.Truncated, &d.Errors, &d.StreamPct)
+	if err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+// KnowledgeStats 知识库统计。
+type KnowledgeStats struct {
+	TotalConfigs   int64 `json:"total_configs"`
+	TotalUsage     int64 `json:"total_usage"`
+	UniqueAgents   int64 `json:"unique_agents"`
+	TopAgent       string `json:"top_agent"`
+	TopAgentUses   int64 `json:"top_agent_uses"`
+	AvgConfigSize  int   `json:"avg_config_size"`
+}
+
+// GetKnowledgeStats 知识资产层汇总。
+func (s *Store) GetKnowledgeStats(ctx context.Context) (*KnowledgeStats, error) {
+	const sql = `
+SELECT count(*),
+  coalesce(sum(use_count), 0),
+  count(DISTINCT agent_name),
+  coalesce((SELECT agent_name FROM system_prompts ORDER BY use_count DESC LIMIT 1), ''),
+  coalesce((SELECT use_count FROM system_prompts ORDER BY use_count DESC LIMIT 1), 0),
+  coalesce(avg(content_size), 0)::int
+FROM system_prompts`
+	var k KnowledgeStats
+	err := s.pool.QueryRow(ctx, sql).Scan(
+		&k.TotalConfigs, &k.TotalUsage, &k.UniqueAgents,
+		&k.TopAgent, &k.TopAgentUses, &k.AvgConfigSize)
+	if err != nil {
+		return nil, err
+	}
+	return &k, nil
+}
+
+// EndpointStats 端点分布。
+type EndpointStat struct {
+	Endpoint string `json:"endpoint"`
+	Count    int64  `json:"count"`
+	StreamPct int   `json:"stream_pct"`
+}
+
+// EndpointDistribution 按端点统计。
+func (s *Store) EndpointDistribution(ctx context.Context) ([]EndpointStat, error) {
+	const sql = `
+SELECT endpoint, count(*),
+  coalesce(avg(CASE WHEN is_stream THEN 100 ELSE 0 END), 0)::int
+FROM llm_conversation GROUP BY endpoint ORDER BY count(*) DESC`
+	rows, err := s.pool.Query(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []EndpointStat
+	for rows.Next() {
+		var e EndpointStat
+		if err := rows.Scan(&e.Endpoint, &e.Count, &e.StreamPct); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// HourlyDistribution 按小时分布(发现高峰时段)。
+type HourlyPoint struct {
+	Hour  int   `json:"hour"`
+	Count int64 `json:"count"`
+}
+
+// HourlyTrend 24 小时分布(按 timezone)。
+func (s *Store) HourlyTrend(ctx context.Context, timezone string) ([]HourlyPoint, error) {
+	const sql = `
+SELECT extract(hour FROM created_at AT TIME ZONE $1)::int AS h, count(*) AS c
+FROM llm_conversation
+WHERE created_at > now() - interval '24 hours'
+GROUP BY h ORDER BY h`
+	rows, err := s.pool.Query(ctx, sql, timezone)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	// 初始化 24 小时
+	hourMap := make(map[int]int64)
+	for i := 0; i < 24; i++ {
+		hourMap[i] = 0
+	}
+	for rows.Next() {
+		var h int
+		var c int64
+		if err := rows.Scan(&h, &c); err != nil {
+			return nil, err
+		}
+		hourMap[h] = c
+	}
+	out := make([]HourlyPoint, 0, 24)
+	for i := 0; i < 24; i++ {
+		out = append(out, HourlyPoint{Hour: i, Count: hourMap[i]})
+	}
+	return out, rows.Err()
+}
+
+// TokenEfficiency token 效率(按 model)。
+type TokenEfficiency struct {
+	Model           string  `json:"model"`
+	Count           int64   `json:"count"`
+	AvgPrompt       float64 `json:"avg_prompt"`
+	AvgCompletion   float64 `json:"avg_completion"`
+	AvgLatency      float64 `json:"avg_latency"`
+}
+
+// ModelTokenStats 按 model 统计 token 效率 + 延迟。
+func (s *Store) ModelTokenStats(ctx context.Context) ([]TokenEfficiency, error) {
+	const sql = `
+SELECT coalesce(model, '(空)'),
+  count(*),
+  coalesce(avg(prompt_tokens), 0),
+  coalesce(avg(completion_tokens), 0),
+  coalesce(avg(upstream_latency_ms), 0)
+FROM llm_conversation WHERE model != ''
+GROUP BY model ORDER BY count(*) DESC`
+	rows, err := s.pool.Query(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TokenEfficiency
+	for rows.Next() {
+		var t TokenEfficiency
+		if err := rows.Scan(&t.Model, &t.Count, &t.AvgPrompt, &t.AvgCompletion, &t.AvgLatency); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// itoa 简单整数转字符串。
 func itoa(n int) string {
 	return fmt.Sprintf("%d", n)
+}
+
+// ExportConversations 导出对话(最多 limit 条, 用于 CSV/JSON 导出)。
+func (s *Store) ExportConversations(ctx context.Context, f ConversationFilter, limit int) ([]ConversationSummary, error) {
+	if limit <= 0 || limit > 10000 {
+		limit = 1000
+	}
+	f.Page = 1
+	f.Size = limit
+	list, _, err := s.ListConversations(ctx, f)
+	return list, err
 }

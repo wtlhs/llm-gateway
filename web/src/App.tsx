@@ -4,6 +4,7 @@ import {
   MessageOutlined,
   BookOutlined,
   SettingOutlined,
+  MonitorOutlined,
 } from '@ant-design/icons'
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import { useTheme } from './theme'
@@ -11,6 +12,7 @@ import Dashboard from './pages/Dashboard'
 import Conversations from './pages/Conversations'
 import Knowledge from './pages/Knowledge'
 import Settings from './pages/Settings'
+import Ops from './pages/Ops'
 
 const { Header, Content } = Layout
 
@@ -23,6 +25,7 @@ export default function App() {
     { key: '/', icon: <DashboardOutlined />, label: '总览' },
     { key: '/conversations', icon: <MessageOutlined />, label: '对话' },
     { key: '/knowledge', icon: <BookOutlined />, label: '知识库' },
+    { key: '/ops', icon: <MonitorOutlined />, label: '运维' },
     { key: '/settings', icon: <SettingOutlined />, label: '配置' },
   ]
 
@@ -69,12 +72,13 @@ export default function App() {
       </Header>
 
       <Content style={{ padding: '32px 32px', maxWidth: 1280, width: '100%', margin: '0 auto' }}>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/conversations" element={<Conversations />} />
-          <Route path="/knowledge" element={<Knowledge />} />
-          <Route path="/settings" element={<Settings />} />
-        </Routes>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/conversations" element={<Conversations />} />
+            <Route path="/knowledge" element={<Knowledge />} />
+            <Route path="/ops" element={<Ops />} />
+            <Route path="/settings" element={<Settings />} />
+          </Routes>
       </Content>
     </Layout>
   )

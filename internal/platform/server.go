@@ -39,14 +39,24 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/dashboard/trend", wrap(h.DashboardTrend))
 	mux.Handle("GET /api/v1/dashboard/top-models", wrap(h.TopModels))
 	mux.Handle("GET /api/v1/dashboard/top-callers", wrap(h.TopCallers))
+	mux.Handle("GET /api/v1/dashboard/hourly", wrap(h.HourlyTrend))
+	mux.Handle("GET /api/v1/dashboard/endpoints", wrap(h.EndpointDist))
+	mux.Handle("GET /api/v1/dashboard/model-stats", wrap(h.ModelStats))
 
 	// 对话检索
 	mux.Handle("GET /api/v1/conversations", wrap(h.ListConversations))
 	mux.Handle("GET /api/v1/conversations/{id}", wrap(h.GetConversation))
+	mux.Handle("GET /api/v1/conversations/export", wrap(h.ExportConversations))
 
 	// 知识库(配置层)
 	mux.Handle("GET /api/v1/knowledge/configs", wrap(h.ListSystemPrompts))
 	mux.Handle("GET /api/v1/knowledge/configs/{hash}", wrap(h.GetSystemPrompt))
+	mux.Handle("GET /api/v1/knowledge/stats", wrap(h.KnowledgeStats))
+
+	// 运维监控
+	mux.Handle("GET /api/v1/ops/db-stats", wrap(h.DBStats))
+	mux.Handle("GET /api/v1/ops/data-quality", wrap(h.DataQuality))
+	mux.Handle("GET /api/v1/ops/latency", wrap(h.LatencyDist))
 
 	// 健康检查(免鉴权)
 	mux.HandleFunc("GET /api/v1/health", s.healthHandler)
