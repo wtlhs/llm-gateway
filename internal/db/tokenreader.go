@@ -2,9 +2,11 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/go-sql-driver/mysql" // MySQL 驱动注册
 )
 
 // TokenRow 对应 new-api 库 tokens 表的字段(只读所需列)。
@@ -15,45 +17,48 @@ type TokenRow struct {
 	Group  string
 }
 
-// TokenReader 只读访问 new-api 库, 用于反查 caller 映射。
+// TokenReader 只读访问 new-api MySQL 库, 用于反查 caller 映射。
 // 依据 DESIGN.md §4.4 / §5.4。
 type TokenReader struct {
-	pool *pgxpool.Pool
+	db *sql.DB
 }
 
-// NewTokenReader 基于 new-api 库连接池构造(只读账号)。
+// NewTokenReader 基于 new-api MySQL 库连接池构造(只读账号)。
+// dbURL 格式: user:pass@tcp(host:3306)/new_api?charset=utf8mb4&parseTime=true
 func NewTokenReader(ctx context.Context, dbURL string) (*TokenReader, error) {
-	cfg, err := pgxpool.ParseConfig(dbURL)
+	db, err := sql.Open("mysql", dbURL)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open mysql: %w", err)
 	}
 	// 只读场景保守连接数
-	cfg.MaxConns = 4
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		return nil, err
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(2)
+	// 防止 MySQL wait_timeout 主动断开空闲连接后, 下次刷新报 bad connection
+	db.SetConnMaxLifetime(5 * time.Minute)
+
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("ping mysql: %w", err)
 	}
-	if err := pool.Ping(ctx); err != nil {
-		return nil, err
-	}
-	return &TokenReader{pool: pool}, nil
+	return &TokenReader{db: db}, nil
 }
 
 // Close 释放连接池。
 func (r *TokenReader) Close() {
-	if r.pool != nil {
-		r.pool.Close()
+	if r.db != nil {
+		r.db.Close()
 	}
 }
 
 // LoadAll 拉取所有启用中的 token 映射。
-// 对应 queries/token_map.sql::LoadTokenMap。
+// MySQL 注意: key/group 均用反引号(MySQL 保留字/关键字)。
 func (r *TokenReader) LoadAll(ctx context.Context) ([]TokenRow, error) {
-	const sql = `
-SELECT key, COALESCE(name,''), user_id, COALESCE("group",'')
+	const sqlQuery = `
+SELECT ` + "`key`" + `, COALESCE(` + "`name`" + `,''), user_id, COALESCE(` + "`group`" + `,'')
 FROM tokens
 WHERE deleted_at IS NULL AND status = 1`
-	rows, err := r.pool.Query(ctx, sql)
+
+	rows, err := r.db.QueryContext(ctx, sqlQuery)
 	if err != nil {
 		return nil, fmt.Errorf("token reader: %w", err)
 	}

@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -79,9 +80,15 @@ func (c *CallerCache) refreshOnce(ctx context.Context, onRefresh func([]db.Token
 
 	// 构建新 map: key = sha256(rawKey)。注意: rawKey(rows[i].Key) 仅在此处短暂存在,
 	// 不进 map, 不长期持有(M3)。
+	// New API 约定: 调用方传 "sk-xxx"，但 tokens 表存的 key 不带 "sk-" 前缀。
+	// 请求侧 AuthCache 对 "sk-xxx" 算 hash，所以这里要补 "sk-" 前缀才能匹配。
 	next := make(map[string]CallerInfo, len(rows))
 	for _, r := range rows {
-		h := sha256Hex([]byte(r.Key))
+		rawKey := r.Key
+		if !strings.HasPrefix(rawKey, "sk-") {
+			rawKey = "sk-" + rawKey
+		}
+		h := sha256Hex([]byte(rawKey))
 		next[h] = CallerInfo{Tag: r.Name, UserID: r.UserID, Group: r.Group}
 	}
 

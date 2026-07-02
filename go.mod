@@ -4,6 +4,7 @@ go 1.25
 
 require (
 	github.com/andybalholm/brotli v1.1.1
+	github.com/go-sql-driver/mysql v1.10.0
 	github.com/jackc/pgx/v5 v5.7.2
 	github.com/kelseyhightower/envconfig v1.4.0
 	github.com/prometheus/client_golang v1.22.0
@@ -12,6 +13,7 @@ require (
 )
 
 require (
+	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect

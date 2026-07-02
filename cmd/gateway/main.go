@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -72,7 +73,12 @@ func main() {
 			// 回填历史记录(§5.4): cache 刷新后补 caller
 			for _, r := range rows {
 				// 注意: 此处 r.Key 短暂存在, 仅算 hash 后丢弃(M3)
-				h := audit.SHA256Hex(r.Key)
+				// New API tokens 表的 key 不带 "sk-" 前缀，需补齐以匹配请求侧 hash
+				rawKey := r.Key
+				if !strings.HasPrefix(rawKey, "sk-") {
+					rawKey = "sk-" + rawKey
+				}
+				h := audit.SHA256Hex(rawKey)
 				if n, err := store.BackfillCallerByTokenHash(ctx, h, r.Name, r.UserID, r.Group); err == nil && n > 0 {
 					slog.Debug("backfilled caller", "hash", h, "n", n)
 				}
