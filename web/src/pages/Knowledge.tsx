@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react'
 import { Table, Tag, Drawer, Spin, message, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
+import { useTheme } from '../theme'
 import { api, type SystemPromptSummary } from '../api/client'
 
 const { Paragraph, Text } = Typography
 
 export default function Knowledge() {
+  const { mode } = useTheme()
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<SystemPromptSummary[]>([])
   const [total, setTotal] = useState(0)
@@ -100,10 +102,11 @@ export default function Knowledge() {
       >
         {detailLoading ? <Spin /> : (
           <pre style={{
-            background: '#1e1e1e', color: '#d4d4d4', padding: 16,
-            borderRadius: 6, overflow: 'auto', fontSize: 13,
+            background: mode === 'dark' ? '#0F0F11' : '#1E1E1E',
+            color: '#d4d4d4', padding: 16,
+            borderRadius: 'var(--radius-sm)', overflow: 'auto', fontSize: 13,
             fontFamily: 'Consolas, Monaco, monospace', whiteSpace: 'pre-wrap',
-            maxHeight: '80vh',
+            maxHeight: '78vh', border: '1px solid var(--border-color)',
           }}>
             {content}
           </pre>

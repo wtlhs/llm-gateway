@@ -7,7 +7,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8088',
+        target: process.env.PLATFORM_UPSTREAM || 'http://127.0.0.1:18088',
         changeOrigin: true,
       },
     },

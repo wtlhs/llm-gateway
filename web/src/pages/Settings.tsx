@@ -15,7 +15,7 @@ export default function Settings() {
         style={{ marginBottom: 16 }}
       />
 
-      <Card title="访问凭证" style={{ marginBottom: 16 }}>
+      <Card title="访问凭证" style={{ marginBottom: 16, background: 'var(--bg-card)', border: '1px solid var(--border-color)' }}>
         <Paragraph type="secondary">
           Bearer Token, 调用后端 API 时用。留空则不鉴权(内网/开发场景)。
         </Paragraph>
@@ -28,7 +28,7 @@ export default function Settings() {
         />
       </Card>
 
-      <Card title="系统信息">
+      <Card title="系统信息" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)' }}>
         <Descriptions column={1} size="small">
           <Descriptions.Item label="版本">Platform MVP v0.1</Descriptions.Item>
           <Descriptions.Item label="后端">Go cmd/platform (独立进程)</Descriptions.Item>

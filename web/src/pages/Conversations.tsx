@@ -1,8 +1,11 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Table, Input, Space, Tag, Drawer, Descriptions, Spin, message, Button } from 'antd'
+import { Table, Input, Space, Tag, Drawer, Descriptions, Spin, message, Button, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
+import { useTheme } from '../theme'
 import { api, type ConversationSummary, type ConversationDetail } from '../api/client'
+
+const { Text } = Typography
 
 export default function Conversations() {
   const [loading, setLoading] = useState(false)
@@ -142,19 +145,19 @@ export default function Conversations() {
             </Descriptions>
 
             <h4>Prompt</h4>
-            <pre style={{ background: '#f5f5f5', padding: 12, borderRadius: 4, maxHeight: 240, overflow: 'auto', fontSize: 12 }}>
+            <pre style={{ background: 'var(--bg-hover)', padding: 14, borderRadius: 'var(--radius-sm)', maxHeight: 240, overflow: 'auto', fontSize: 12, border: '1px solid var(--border-color)' }}>
               {JSON.stringify(detail.prompt_text, null, 2)}
             </pre>
 
             <h4>Completion</h4>
-            <pre style={{ background: '#f5f5f5', padding: 12, borderRadius: 4, maxHeight: 240, overflow: 'auto', fontSize: 12 }}>
+            <pre style={{ background: 'var(--bg-hover)', padding: 14, borderRadius: 'var(--radius-sm)', maxHeight: 240, overflow: 'auto', fontSize: 12, border: '1px solid var(--border-color)' }}>
               {JSON.stringify(detail.completion_text, null, 2)}
             </pre>
 
             {detail.tool_calls && (
               <>
                 <h4>Tool Calls</h4>
-                <pre style={{ background: '#f5f5f5', padding: 12, borderRadius: 4, maxHeight: 200, overflow: 'auto', fontSize: 12 }}>
+                <pre style={{ background: 'var(--bg-hover)', padding: 14, borderRadius: 'var(--radius-sm)', maxHeight: 200, overflow: 'auto', fontSize: 12, border: '1px solid var(--border-color)' }}>
                   {JSON.stringify(detail.tool_calls, null, 2)}
                 </pre>
               </>
