@@ -20,9 +20,10 @@ import (
 
 // mockPersister 捕获所有 Insert 调用, 供断言。
 type mockPersister struct {
-	mu       sync.Mutex
-	records  []*db.Conversation
-	failWith error
+	mu        sync.Mutex
+	records   []*db.Conversation
+	sysPrompts []*db.SystemPrompt // 捕获 system prompt upsert 调用
+	failWith  error
 }
 
 func (m *mockPersister) Insert(ctx context.Context, c *db.Conversation) error {
@@ -30,6 +31,28 @@ func (m *mockPersister) Insert(ctx context.Context, c *db.Conversation) error {
 	defer m.mu.Unlock()
 	m.records = append(m.records, c)
 	return m.failWith
+}
+
+// UpsertSystemPrompt 实现 audit.SystemPromptPersister, 让 pipeline 触发 system 分流。
+// 去重模拟: 同 hash 只记第一次。
+func (m *mockPersister) UpsertSystemPrompt(ctx context.Context, sp *db.SystemPrompt, callerTag string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.sysPrompts {
+		if existing.Hash == sp.Hash {
+			return nil // 模拟 ON CONFLICT 命中
+		}
+	}
+	m.sysPrompts = append(m.sysPrompts, sp)
+	return nil
+}
+
+func (m *mockPersister) snapshotSysPrompts() []*db.SystemPrompt {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]*db.SystemPrompt, len(m.sysPrompts))
+	copy(out, m.sysPrompts)
+	return out
 }
 
 func (m *mockPersister) snapshot() []*db.Conversation {
@@ -669,13 +692,157 @@ func TestE2E_LargeBody_NotTruncated(t *testing.T) {
 	if err := json.Unmarshal(got.PromptText, &prompt); err != nil {
 		t.Fatalf("prompt not valid json (downgraded?): %v", err)
 	}
-	// user 消息应存在(之前截断 bug 导致看不到 user)
+	// system 分流后, messages 只剩 user(之前截断 bug 导致看不到 user)
 	msgs := prompt["messages"].([]any)
-	if len(msgs) < 2 {
-		t.Fatalf("expected 2 messages, got %d (truncated?)", len(msgs))
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message (system split out), got %d", len(msgs))
 	}
-	userMsg := msgs[1].(map[string]any)
-	if userMsg["role"] != "user" {
-		t.Errorf("second message role=%v, want user", userMsg["role"])
+	if msgs[0].(map[string]any)["role"] != "user" {
+		t.Errorf("message role=%v, want user", msgs[0].(map[string]any)["role"])
+	}
+	// system 被分流到资产层
+	if got.SystemPromptHash == "" {
+		t.Error("expected system_prompt_hash non-empty (system split out)")
+	}
+}
+
+// ============================================================
+// 测试 11: system prompt 分流 → 资产层去重 + prompt_text 精简
+// 验证: 含 system 的请求, system 被抽到 sysPrompts, prompt_text 不含 system
+// ============================================================
+func TestE2E_SystemSplit_LayeredStorage(t *testing.T) {
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	})
+
+	proxy, _, spy, _ := newTestGateway(t, upstream)
+
+	sysContent := "You are a coding agent that writes Go code."
+	body := fmt.Sprintf(`{"model":"glm-5.2","messages":[{"role":"system","content":%q},{"role":"user","content":"write hello world"}]}`, sysContent)
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-split-test")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	recs := waitForRecord(t, spy, 1)
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(recs))
+	}
+	got := recs[0]
+
+	// 1. system 被分流: prompt_text 不含 system role
+	var prompt map[string]any
+	json.Unmarshal(got.PromptText, &prompt)
+	msgs := prompt["messages"].([]any)
+	for _, m := range msgs {
+		if m.(map[string]any)["role"] == "system" {
+			t.Error("system message should be split out of prompt_text")
+		}
+	}
+	// user 保留
+	if len(msgs) != 1 || msgs[0].(map[string]any)["role"] != "user" {
+		t.Error("prompt_text should contain only user message")
+	}
+
+	// 2. system_prompt_hash 非空, 指向资产层
+	if got.SystemPromptHash == "" {
+		t.Error("system_prompt_hash should be non-empty")
+	}
+
+	// 3. 资产层有对应的 system prompt
+	sysPrompts := spy.snapshotSysPrompts()
+	if len(sysPrompts) != 1 {
+		t.Fatalf("expected 1 system prompt, got %d", len(sysPrompts))
+	}
+	sp := sysPrompts[0]
+	if sp.Content != sysContent {
+		t.Errorf("system content=%q, want %q", sp.Content, sysContent)
+	}
+	if sp.Hash != got.SystemPromptHash {
+		t.Error("system prompt hash mismatch between conversation and sysPrompts")
+	}
+}
+
+// ============================================================
+// 测试 12: 同一 system prompt 多次请求 → 资产层去重(只存 1 份)
+// ============================================================
+func TestE2E_SystemSplit_Dedup(t *testing.T) {
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+	})
+
+	proxy, _, spy, _ := newTestGateway(t, upstream)
+
+	sysContent := "Shared system prompt for dedup test."
+	// 发 3 次相同 system 的请求
+	for i := 0; i < 3; i++ {
+		body := fmt.Sprintf(`{"model":"x","messages":[{"role":"system","content":%q},{"role":"user","content":"q%d"}]}`, sysContent, i)
+		req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer sk-dedup")
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		proxy.ServeHTTP(rec, req)
+	}
+
+	recs := waitForRecord(t, spy, 3)
+	if len(recs) != 3 {
+		t.Fatalf("expected 3 records, got %d", len(recs))
+	}
+
+	// 3 条对话的 system_prompt_hash 应相同(同一 system)
+	hash := recs[0].SystemPromptHash
+	if hash == "" {
+		t.Fatal("system_prompt_hash empty")
+	}
+	for i, r := range recs {
+		if r.SystemPromptHash != hash {
+			t.Errorf("record %d hash=%q, want %q (dedup)", i, r.SystemPromptHash, hash)
+		}
+	}
+
+	// 资产层只存 1 份(mock 的 UpsertSystemPrompt 模拟 ON CONFLICT 去重)
+	sysPrompts := spy.snapshotSysPrompts()
+	if len(sysPrompts) != 1 {
+		t.Errorf("expected 1 deduped system prompt, got %d", len(sysPrompts))
+	}
+}
+
+// ============================================================
+// 测试 13: 无 system 的请求 → 不触发分流, system_prompt_hash 为空
+// ============================================================
+func TestE2E_SystemSplit_NoSystem(t *testing.T) {
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+	})
+
+	proxy, _, spy, _ := newTestGateway(t, upstream)
+
+	body := `{"model":"x","messages":[{"role":"user","content":"plain question"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-nosys")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+
+	recs := waitForRecord(t, spy, 1)
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(recs))
+	}
+	got := recs[0]
+	if got.SystemPromptHash != "" {
+		t.Error("system_prompt_hash should be empty for no-system request")
+	}
+	if len(spy.snapshotSysPrompts()) != 0 {
+		t.Error("no system prompt should be upserted")
 	}
 }
