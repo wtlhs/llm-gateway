@@ -27,9 +27,15 @@ func New(cfg *Config, store *db.Store) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	// 鉴权 + CORS + JSON 中间件链
+	// 安全中间件链(外→内):
+	// 安全响应头 → CORS → IP白名单 → 速率限制 → 鉴权 → JSON
 	wrap := func(hf http.HandlerFunc) http.Handler {
-		return s.corsMiddleware(s.authMiddleware(s.jsonMiddleware(hf)))
+		return s.securityHeadersMiddleware(
+			s.corsMiddleware(
+				s.ipAllowListMiddleware(
+					s.rateLimitMiddleware(
+						s.authMiddleware(
+							s.jsonMiddleware(hf))))))
 	}
 
 	h := handler.New(s.store, s.cfg.Timezone, s.cfg.QueryTimeout)
@@ -91,27 +97,6 @@ func (s *Server) staticHandler() http.Handler {
 	})
 }
 
-// authMiddleware Bearer Token 鉴权。token 为空时跳过(本地开发友好)。
-// 支持 Authorization: Bearer 头 和 ?token= 查询参数(后者用于 window.open 导出场景)。
-func (s *Server) authMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.AuthToken == "" {
-			next.ServeHTTP(w, r) // 无 token 配置, 放行(内网/开发场景)
-			return
-		}
-		// 优先 Bearer 头, 回退查询参数
-		cred := extractBearer(r)
-		if cred == "" {
-			cred = r.URL.Query().Get("token")
-		}
-		if cred != s.cfg.AuthToken {
-			writeError(w, http.StatusUnauthorized, "unauthorized")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
 // jsonMiddleware 设置 JSON 响应头。
 func (s *Server) jsonMiddleware(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -120,7 +105,7 @@ func (s *Server) jsonMiddleware(next http.HandlerFunc) http.Handler {
 	})
 }
 
-// corsMiddleware 简单 CORS(前端独立部署时需要)。
+// corsMiddleware CORS(生产建议设具体域名)。
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", s.cfg.CORSOrigins)

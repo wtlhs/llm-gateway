@@ -4,27 +4,35 @@ package platform
 
 import (
 	"fmt"
+	"net"
+	"strings"
 	"time"
 
 	"github.com/kelseyhightower/envconfig"
 )
 
 // Config 平台后端运行期配置(PLATFORM_* 环境变量)。
-// 与网关 config 独立, 平台是只读查询服务, 不需要网关的限流/熔断等参数。
 type Config struct {
 	ListenAddr string `envconfig:"PLATFORM_LISTEN_ADDR" default:":8088"`
 
 	// 沉淀库(与网关共用同一个 PG)
 	DBURL string `envconfig:"PLATFORM_DB_URL" required:"true"`
 
-	// 连接池(平台查询用, 故意设小避免挤占网关写入, 见 PLATFORM_DESIGN §5.4)
+	// 连接池(平台查询用, 故意设小避免挤占网关写入)
 	DBMaxOpenConns int `envconfig:"PLATFORM_DB_MAX_OPEN_CONNS" default:"5"`
 
-	// 鉴权(复用网关的 AdminAuthToken, 或单独配置)
+	// 鉴权(生产必须设置, 留空启动会 WARN)
 	AuthToken string `envconfig:"PLATFORM_AUTH_TOKEN" default:""`
 
-	// CORS(前端独立部署时需要)
+	// IP 白名单(逗号分隔 CIDR/IP, 留空=不限; 生产建议设内网段)
+	// 例: "127.0.0.1,10.0.0.0/8,172.16.0.0/12"
+	AllowIPs string `envconfig:"PLATFORM_ALLOW_IPS" default:""`
+
+	// CORS(生产建议设具体域名, 不用 *)
 	CORSOrigins string `envconfig:"PLATFORM_CORS_ORIGINS" default:"*"`
+
+	// 速率限制(每分钟请求数, 防 API 被暴力爬取)
+	RateLimitPerMin int `envconfig:"PLATFORM_RATE_LIMIT_PER_MIN" default:"120"`
 
 	// 查询超时(防慢查询拖垮 PG)
 	QueryTimeout time.Duration `envconfig:"PLATFORM_QUERY_TIMEOUT" default:"10s"`
@@ -44,5 +52,35 @@ func Load() (*Config, error) {
 	if c.DBMaxOpenConns <= 0 {
 		c.DBMaxOpenConns = 5
 	}
+	if c.RateLimitPerMin <= 0 {
+		c.RateLimitPerMin = 120
+	}
 	return &c, nil
+}
+
+// AllowIPSet 解析 IP 白名单为可校验的格式(net.IPNet 列表)。
+// 空表示不限。
+func (c *Config) AllowIPSet() []*net.IPNet {
+	if c.AllowIPs == "" {
+		return nil
+	}
+	var nets []*net.IPNet
+	for _, item := range strings.Split(c.AllowIPs, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		// 不带 / 的当 /32 (IPv4) 或 /128 (IPv6)
+		if !strings.Contains(item, "/") {
+			if strings.Contains(item, ":") {
+				item += "/128"
+			} else {
+				item += "/32"
+			}
+		}
+		if _, n, err := net.ParseCIDR(item); err == nil {
+			nets = append(nets, n)
+		}
+	}
+	return nets
 }

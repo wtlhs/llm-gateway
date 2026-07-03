@@ -35,6 +35,23 @@ func main() {
 		"timezone", cfg.Timezone,
 		"db_pool", cfg.DBMaxOpenConns)
 
+	// 安全配置摘要(启动时一目了然)
+	if cfg.AuthToken == "" {
+		slog.Warn("⚠ PLATFORM_AUTH_TOKEN 未设置! 仅允许 localhost 访问(生产必须设置 token)")
+	} else {
+		slog.Info("security: auth token enabled")
+	}
+	if cfg.AllowIPs != "" {
+		slog.Info("security: IP allowlist active", "ips", cfg.AllowIPs)
+	} else {
+		slog.Warn("security: IP allowlist not configured (open to all IPs)")
+	}
+	slog.Info("security: rate limit", "per_min", cfg.RateLimitPerMin)
+	slog.Info("security: security headers enabled (CSP/X-Frame-Options/HSTS)")
+	if cfg.CORSOrigins == "*" {
+		slog.Warn("security: CORS=* (生产建议限制为具体域名)")
+	}
+
 	// 2. 连接沉淀库(复用 db.NewStore, 独立连接池)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
