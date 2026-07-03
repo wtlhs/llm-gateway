@@ -45,7 +45,7 @@ export default function App() {
         <Space size="large" align="center">
           <span
             onClick={() => navigate('/')}
-            style={{ cursor: 'pointer', fontWeight: 600, fontSize: 14, color: 'var(--text-primary)', letterSpacing: '-0.01em' }}
+            style={{ cursor: 'pointer', fontWeight: 600, fontSize: 15, color: 'var(--text-primary)', letterSpacing: '-0.01em' }}
           >
             Context
           </span>
@@ -56,7 +56,7 @@ export default function App() {
             onClick={({ key }) => navigate(key)}
             style={{
               background: 'transparent', borderBottom: 'none', minWidth: 320, flex: 1,
-              fontSize: 13,
+              fontSize: 15, lineHeight: '52px',
             }}
           />
         </Space>
