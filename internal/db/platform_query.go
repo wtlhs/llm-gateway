@@ -127,16 +127,15 @@ LIMIT %d OFFSET %d`, where, f.Size, (f.Page-1)*f.Size)
 func (s *Store) GetConversation(ctx context.Context, id int64) (*Conversation, error) {
 	const sql = `
 SELECT id, request_id, coalesce(upstream_request_id,''), coalesce(caller_tag,''),
-       caller_user_id, coalesce(caller_group,''), coalesce(token_key_hash,''),
+       coalesce(caller_user_id,0), coalesce(caller_group,''), coalesce(token_key_hash,''),
        coalesce(model,''), endpoint, is_stream, prompt_text,
        coalesce(completion_text,'{}'::jsonb), tool_calls, coalesce(request_body_hash,''),
-       http_status, prompt_tokens, completion_tokens, coalesce(error_message,''),
-       coalesce(client_ip,''), redacted, truncated, upstream_latency_ms, total_latency_ms,
-       coalesce(system_prompt_hash,''), system_prompt_size, created_at
+       http_status, coalesce(prompt_tokens,0), coalesce(completion_tokens,0), coalesce(error_message,''),
+       coalesce(client_ip,''), redacted, truncated, coalesce(upstream_latency_ms,0), coalesce(total_latency_ms,0),
+       coalesce(system_prompt_hash,''), coalesce(system_prompt_size,0), created_at
 FROM llm_conversation WHERE id = $1`
 	var c Conversation
-	var prompt, completion json.RawMessage
-	var tools json.RawMessage
+	var prompt, completion, tools *json.RawMessage // 都可能为 NULL
 	err := s.pool.QueryRow(ctx, sql, id).Scan(
 		&c.ID, &c.RequestID, &c.UpstreamRequestID, &c.CallerTag,
 		&c.CallerUserID, &c.CallerGroup, &c.TokenKeyHash,
@@ -149,9 +148,15 @@ FROM llm_conversation WHERE id = $1`
 	if err != nil {
 		return nil, err
 	}
-	c.PromptText = prompt
-	c.CompletionText = completion
-	c.ToolCalls = tools
+	if prompt != nil {
+		c.PromptText = *prompt
+	}
+	if completion != nil {
+		c.CompletionText = *completion
+	}
+	if tools != nil {
+		c.ToolCalls = *tools
+	}
 	return &c, nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/company/llm-gateway/internal/db"
@@ -71,7 +72,12 @@ func (h *Handler) GetConversation(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	conv, err := h.store.GetConversation(ctx, id)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "conversation not found")
+		// 区分"不存在"和"查询错误", 便于排查
+		if strings.Contains(err.Error(), "no rows") {
+			writeErr(w, http.StatusNotFound, "conversation not found")
+		} else {
+			writeErr(w, http.StatusInternalServerError, "query failed: "+err.Error())
+		}
 		return
 	}
 
