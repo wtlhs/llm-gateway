@@ -10,8 +10,16 @@ services:
       - PLATFORM_LISTEN_ADDR=:8088
       # 沉淀库(与网关共用 PG, 用容器名; 真实密码见 .env.deploy)
       - PLATFORM_DB_URL=postgres://user_admin:${PG_PASSWORD}@1Panel-postgresql-AWYE:5432/llm_gateway?sslmode=disable
-      # 鉴权 token(留空=免鉴权, 生产建议设置)
-      - PLATFORM_AUTH_TOKEN=
+      # ===== 安全配置(生产必填) =====
+      # 鉴权 token(留空=仅localhost访问, 生产必须设置)
+      - PLATFORM_AUTH_TOKEN=${PLATFORM_AUTH_TOKEN}
+      # IP 白名单(逗号分隔 CIDR; 留空=不限; 建议设内网段)
+      - PLATFORM_ALLOW_IPS=127.0.0.1,10.0.0.0/8,172.16.0.0/12
+      # CORS 来源(生产建议具体域名, 不用 *)
+      - PLATFORM_CORS_ORIGINS=https://newapi.wtlhs.com
+      # 速率限制(每分钟请求数/IP)
+      - PLATFORM_RATE_LIMIT_PER_MIN=120
+      # ===== 其他 =====
       - PLATFORM_DB_MAX_OPEN_CONNS=5
       - PLATFORM_TIMEZONE=Asia/Shanghai
       - PLATFORM_LOG_LEVEL=info
