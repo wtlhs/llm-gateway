@@ -217,6 +217,7 @@ func toDBRecord(rec *Record) *db.Conversation {
 		RequestID:         rec.GatewayID,
 		UpstreamRequestID: rec.UpstreamRequestID,
 		CallerTag:         rec.CallerTag,
+		CallerName:        rec.CallerUserName,
 		CallerUserID:      rec.CallerUserID,
 		CallerGroup:       rec.CallerGroup,
 		TokenKeyHash:      rec.TokenKeyHash,

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Table, Input, Space, Tag, Drawer, Descriptions, Spin, message, Button, Select, Typography } from 'antd'
+import { Table, Input, Space, Tag, Drawer, Descriptions, Spin, message, Button, Select, Tooltip, Typography } from 'antd'
 import { ExportOutlined, ReloadOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
@@ -55,8 +55,12 @@ export default function Conversations() {
       render: (v: string) => <Text style={{ fontSize: 13 }}>{v || '-'}</Text> },
     { title: '端点', dataIndex: 'endpoint', width: 130,
       render: (v: string) => <Tag style={{ fontSize: 12 }}>{v}</Tag> },
-    { title: '调用方', dataIndex: 'caller_tag', width: 150, ellipsis: true,
-      render: (v: string) => <Text style={{ fontSize: 13 }}>{v || '-'}</Text> },
+    { title: '调用方', width: 150, ellipsis: true,
+      render: (_, r) => {
+        const name = r.caller_name || r.caller_tag || '-'
+        const tip = r.caller_name && r.caller_tag ? `${r.caller_name}（令牌: ${r.caller_tag}）` : name
+        return <Tooltip title={tip}><Text style={{ fontSize: 13 }}>{name}</Text></Tooltip>
+      } },
     { title: '流', dataIndex: 'is_stream', width: 50,
       render: (v: boolean) => <Tag color={v ? 'blue' : 'default'} style={{ fontSize: 12 }}>{v ? '流' : '非'}</Tag> },
     { title: '状态', dataIndex: 'http_status', width: 65,

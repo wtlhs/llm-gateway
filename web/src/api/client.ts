@@ -73,7 +73,8 @@ export interface ModelStat {
 // --- Conversations ---
 
 export interface ConversationSummary {
-  id: number; model: string; endpoint: string; caller_tag: string
+  id: number; model: string; endpoint: string
+  caller_tag: string; caller_name: string
   is_stream: boolean; http_status: number
   prompt_tokens: number; completion_tokens: number
   upstream_latency_ms: number; system_prompt_hash?: string

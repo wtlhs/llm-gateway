@@ -21,7 +21,8 @@ type Conversation struct {
 	ID                int64
 	RequestID         string // gateway_id(网关自生成), 幂等键
 	UpstreamRequestID string // New API 的 X-Oneapi-Request-Id
-	CallerTag         string
+	CallerTag         string // 令牌名(token.Name)
+	CallerName        string // 真实用户名(users.username)
 	CallerUserID      int32
 	CallerGroup       string
 	TokenKeyHash      string
@@ -92,16 +93,16 @@ var ErrDuplicate = errors.New("duplicate request_id, no row inserted")
 func (s *Store) Insert(ctx context.Context, c *Conversation) error {
 	const sql = `
 INSERT INTO llm_conversation (
-    request_id, upstream_request_id, caller_tag, caller_user_id, caller_group,
+    request_id, upstream_request_id, caller_tag, caller_name, caller_user_id, caller_group,
     token_key_hash, model, endpoint, is_stream, prompt_text, completion_text,
     tool_calls, request_body_hash, http_status, prompt_tokens, completion_tokens,
     error_message, client_ip, redacted, truncated, upstream_latency_ms,
     total_latency_ms, version, system_prompt_hash, system_prompt_size
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,1,$23,$24)
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,1,$23,$24,$25)
 ON CONFLICT (request_id) DO NOTHING
 RETURNING id;`
 	tag, err := s.pool.Exec(ctx, sql,
-		c.RequestID, nullable(c.UpstreamRequestID), nullable(c.CallerTag),
+		c.RequestID, nullable(c.UpstreamRequestID), nullable(c.CallerTag), nullable(c.CallerName),
 		c.CallerUserID, nullable(c.CallerGroup), nullable(c.TokenKeyHash),
 		c.Model, c.Endpoint, c.IsStream, c.PromptText,
 		nullableJSON(c.CompletionText), nullableJSON(c.ToolCalls),

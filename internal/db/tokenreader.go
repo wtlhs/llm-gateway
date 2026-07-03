@@ -11,10 +11,11 @@ import (
 
 // TokenRow 对应 new-api 库 tokens 表的字段(只读所需列)。
 type TokenRow struct {
-	Key    string // sk-xxx(将被调用方立即 sha256, 不长期持有)
-	Name   string
-	UserID int32
-	Group  string
+	Key      string // sk-xxx(将被调用方立即 sha256, 不长期持有)
+	Name     string
+	UserID   int32
+	Group    string
+	UserName string // 真实用户名(JOIN users 表, 可空)
 }
 
 // TokenReader 只读访问 new-api MySQL 库, 用于反查 caller 映射。
@@ -50,13 +51,16 @@ func (r *TokenReader) Close() {
 	}
 }
 
-// LoadAll 拉取所有启用中的 token 映射。
+// LoadAll 拉取所有启用中的 token 映射(含真实用户名)。
 // MySQL 注意: key/group 均用反引号(MySQL 保留字/关键字)。
+// LEFT JOIN users 表获取真实用户名(user_id → users.username)。
 func (r *TokenReader) LoadAll(ctx context.Context) ([]TokenRow, error) {
 	const sqlQuery = `
-SELECT ` + "`key`" + `, COALESCE(` + "`name`" + `,''), user_id, COALESCE(` + "`group`" + `,'')
-FROM tokens
-WHERE deleted_at IS NULL AND status = 1`
+SELECT t.` + "`key`" + `, COALESCE(t.` + "`name`" + `,''), t.user_id,
+       COALESCE(t.` + "`group`" + `,''), COALESCE(u.username,'')
+FROM tokens t
+LEFT JOIN users u ON t.user_id = u.id
+WHERE t.deleted_at IS NULL AND t.status = 1`
 
 	rows, err := r.db.QueryContext(ctx, sqlQuery)
 	if err != nil {
@@ -67,7 +71,7 @@ WHERE deleted_at IS NULL AND status = 1`
 	var out []TokenRow
 	for rows.Next() {
 		var t TokenRow
-		if err := rows.Scan(&t.Key, &t.Name, &t.UserID, &t.Group); err != nil {
+		if err := rows.Scan(&t.Key, &t.Name, &t.UserID, &t.Group, &t.UserName); err != nil {
 			return nil, err
 		}
 		out = append(out, t)

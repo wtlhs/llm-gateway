@@ -20,10 +20,11 @@ type Record struct {
 	UpstreamRequestID  string // 从 New API 响应头读取; → upstream_request_id 列
 
 	// caller(请求阶段由 enrichCaller 填充)
-	TokenKeyHash string // sha256(sk-xxx), 始终记录
-	CallerTag    string
-	CallerUserID int32
-	CallerGroup  string
+	TokenKeyHash   string // sha256(sk-xxx), 始终记录
+	CallerTag      string // token.Name(令牌名)
+	CallerUserName string // 真实用户名(users.username)
+	CallerUserID   int32
+	CallerGroup    string
 
 	// 调用上下文
 	Model    string
@@ -257,6 +258,7 @@ func (rec *Record) StripContent() *Record {
 		UpstreamRequestID: rec.UpstreamRequestID,
 		TokenKeyHash:      rec.TokenKeyHash,
 		CallerTag:         rec.CallerTag,
+		CallerUserName:    rec.CallerUserName,
 		CallerUserID:      rec.CallerUserID,
 		CallerGroup:       rec.CallerGroup,
 		Model:             rec.Model,

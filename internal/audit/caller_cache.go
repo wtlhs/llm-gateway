@@ -13,9 +13,10 @@ import (
 
 // CallerInfo 反查得到的 caller 身份。
 type CallerInfo struct {
-	Tag    string // token.Name
-	UserID int32  // token.UserId
-	Group  string // token.Group
+	Tag      string // token.Name(令牌名)
+	UserName string // 真实用户名(users.username, JOIN 获取)
+	UserID   int32  // token.UserId
+	Group    string // token.Group
 }
 
 // CallerCache 以 sha256(token_key) 为 key 缓存 caller 映射(M3: 不缓存原文 key)。
@@ -89,7 +90,7 @@ func (c *CallerCache) refreshOnce(ctx context.Context, onRefresh func([]db.Token
 			rawKey = "sk-" + rawKey
 		}
 		h := sha256Hex([]byte(rawKey))
-		next[h] = CallerInfo{Tag: r.Name, UserID: r.UserID, Group: r.Group}
+		next[h] = CallerInfo{Tag: r.Name, UserName: r.UserName, UserID: r.UserID, Group: r.Group}
 	}
 
 	c.m.Lock()
@@ -130,6 +131,7 @@ func (c *CallerCache) Enrich(rec *Record) {
 	if info, ok := c.LookupByHash(rec.TokenKeyHash); ok {
 		metrics.CallerLookup.WithLabelValues("hit").Inc()
 		rec.CallerTag = info.Tag
+		rec.CallerUserName = info.UserName
 		rec.CallerUserID = info.UserID
 		rec.CallerGroup = info.Group
 	} else {

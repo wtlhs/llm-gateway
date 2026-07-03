@@ -33,6 +33,7 @@ type ConversationSummary struct {
 	Model            string         `json:"model"`
 	Endpoint         string         `json:"endpoint"`
 	CallerTag        string         `json:"caller_tag"`
+	CallerName       string         `json:"caller_name"`
 	IsStream         bool           `json:"is_stream"`
 	HTTPStatus       int            `json:"http_status"`
 	PromptTokens     int32          `json:"prompt_tokens"`
@@ -65,7 +66,7 @@ func (s *Store) ListConversations(ctx context.Context, f ConversationFilter) ([]
 		addWhere("model = $"+itoa(argIdx), f.Model)
 	}
 	if f.Caller != "" {
-		addWhere("caller_tag = $"+itoa(argIdx), f.Caller)
+		addWhere("(caller_name = $"+itoa(argIdx)+" OR caller_tag = $"+itoa(argIdx)+")", f.Caller)
 	}
 	if f.Endpoint != "" {
 		addWhere("endpoint = $"+itoa(argIdx), f.Endpoint)
@@ -97,7 +98,8 @@ func (s *Store) ListConversations(ctx context.Context, f ConversationFilter) ([]
 
 	// 查列表
 	listSQL := fmt.Sprintf(`
-SELECT id, coalesce(model,''), endpoint, coalesce(caller_tag,''), is_stream, http_status,
+SELECT id, coalesce(model,''), endpoint, coalesce(caller_tag,''), coalesce(caller_name,''),
+       is_stream, http_status,
        coalesce(prompt_tokens,0), coalesce(completion_tokens,0), coalesce(upstream_latency_ms,0),
        coalesce(system_prompt_hash,''), truncated, created_at
 FROM llm_conversation %s
@@ -113,7 +115,7 @@ LIMIT %d OFFSET %d`, where, f.Size, (f.Page-1)*f.Size)
 	var out []ConversationSummary
 	for rows.Next() {
 		var c ConversationSummary
-		if err := rows.Scan(&c.ID, &c.Model, &c.Endpoint, &c.CallerTag, &c.IsStream,
+		if err := rows.Scan(&c.ID, &c.Model, &c.Endpoint, &c.CallerTag, &c.CallerName, &c.IsStream,
 			&c.HTTPStatus, &c.PromptTokens, &c.CompletionTokens, &c.UpstreamLatency,
 			&c.SystemPromptHash, &c.Truncated, &c.CreatedAt); err != nil {
 			return nil, 0, err
@@ -251,7 +253,7 @@ func (s *Store) TopByDimension(ctx context.Context, dimension string, limit int)
 	col := "model"
 	switch dimension {
 	case "caller":
-		col = "caller_tag"
+		col = "coalesce(caller_name, caller_tag)" // 优先真实用户名, 回退令牌名
 	case "group":
 		col = "caller_group"
 	case "endpoint":
