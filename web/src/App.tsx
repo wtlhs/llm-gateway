@@ -65,7 +65,7 @@ export default function App() {
           type="text"
           size="small"
           onClick={toggle}
-          style={{ color: 'var(--text-secondary)', fontSize: 12 }}
+          style={{ color: 'var(--text-secondary)', fontSize: 13 }}
         >
           {mode === 'dark' ? '亮色' : '暗色'}
         </Button>

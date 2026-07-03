@@ -33,7 +33,7 @@ export default function Ops() {
 
   const tooltipBase = {
     backgroundColor: cTooltip, borderColor: cGrid, borderWidth: 1,
-    textStyle: { color: isDark ? '#F4F4F5' : '#0D0D0D', fontSize: 12 },
+    textStyle: { color: isDark ? '#F4F4F5' : '#0D0D0D', fontSize: 14 },
     extraCssText: 'border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,0.08);',
   }
 
@@ -44,16 +44,16 @@ export default function Ops() {
     grid: { left: 36, right: 24, top: 16, bottom: 28, containLabel: true },
     xAxis: { type: 'category', data: latency.map(l => l.bucket),
       axisLine: { lineStyle: { color: cGrid } }, axisTick: { show: false },
-      axisLabel: { color: cText, fontSize: 10 } },
+      axisLabel: { color: cText, fontSize: 12 } },
     yAxis: { type: 'value', splitLine: { lineStyle: { color: cGrid } },
-      axisLabel: { color: cText, fontSize: 11 }, axisLine: { show: false }, axisTick: { show: false } },
+      axisLabel: { color: cText, fontSize: 13 }, axisLine: { show: false }, axisTick: { show: false } },
     series: [{
       type: 'bar', barWidth: 18,
       data: latency.map(l => ({
         value: l.count,
         itemStyle: { color: l.count === latMax ? cBarPeak : cBar, borderRadius: [3,3,0,0] },
       })),
-      label: { show: true, position: 'top', color: cText, fontSize: 11 },
+      label: { show: true, position: 'top', color: cText, fontSize: 13 },
     }],
   }
 
@@ -83,14 +83,14 @@ export default function Ops() {
         </div>
         <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border-color)' }}>
           <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
-            <Text style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+            <Text style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>
               VACUUM: <Tag style={{fontSize:10}}>{db?.last_vacuum}</Tag>
             </Text>
-            <Text style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+            <Text style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>
               ANALYZE: <Tag style={{fontSize:10}}>{db?.last_analyze}</Tag>
             </Text>
             {(db?.dead_tuples ?? 0) > 100 && (
-              <Text style={{ fontSize: 11, color: 'var(--amber)' }}>⚠ 建议执行 VACUUM</Text>
+              <Text style={{ fontSize: 13, color: 'var(--amber)' }}>⚠ 建议执行 VACUUM</Text>
             )}
           </div>
         </div>
@@ -111,8 +111,8 @@ export default function Ops() {
             return (
               <div key={q.label}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{q.label}</Text>
-                  <Text style={{ fontSize: 12, fontWeight: 600, color, fontVariantNumeric: 'tabular-nums' }}>{q.val}%</Text>
+                  <Text style={{ fontSize: 14, color: 'var(--text-secondary)' }}>{q.label}</Text>
+                  <Text style={{ fontSize: 14, fontWeight: 600, color, fontVariantNumeric: 'tabular-nums' }}>{q.val}%</Text>
                 </div>
                 <div style={{ height: 6, background: 'var(--bg-subtle)', borderRadius: 3, overflow: 'hidden' }}>
                   <div style={{

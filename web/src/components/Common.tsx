@@ -19,8 +19,8 @@ export function SectionHeader({ title, subtitle, extra }: {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
       <div>
-        <Text style={{ fontSize: 13, fontWeight: 600, display: 'block', color: 'var(--text-primary)' }}>{title}</Text>
-        {subtitle && <Text style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{subtitle}</Text>}
+        <Text style={{ fontSize: 15, fontWeight: 600, display: 'block', color: 'var(--text-primary)' }}>{title}</Text>
+        {subtitle && <Text style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>{subtitle}</Text>}
       </div>
       {extra}
     </div>
@@ -40,7 +40,7 @@ export function PanelSkeleton({ lines = 4 }: { lines?: number }) {
 export function EmptyPanel({ text = '暂无数据' }: { text?: string }) {
   return (
     <div style={{ padding: '48px 24px', textAlign: 'center' }}>
-      <Empty description={<Text style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>{text}</Text>} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+      <Empty description={<Text style={{ color: 'var(--text-tertiary)', fontSize: 14 }}>{text}</Text>} image={Empty.PRESENTED_IMAGE_SIMPLE} />
     </div>
   )
 }
@@ -49,7 +49,7 @@ export function EmptyPanel({ text = '暂无数据' }: { text?: string }) {
 export function MiniStat({ label, value, color }: { label: string; value: string | number; color?: string }) {
   return (
     <div style={{ flex: 1 }}>
-      <Text style={{ fontSize: 11, color: 'var(--text-tertiary)', display: 'block', marginBottom: 4 }}>{label}</Text>
+      <Text style={{ fontSize: 13, color: 'var(--text-tertiary)', display: 'block', marginBottom: 4 }}>{label}</Text>
       <Text style={{ fontSize: 16, fontWeight: 600, color: color || 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
         {typeof value === 'number' ? value.toLocaleString() : value}
       </Text>

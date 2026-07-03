@@ -14,14 +14,14 @@ function MetricCard({ label, value, suffix, danger, highlight }: {
 }) {
   return (
     <div style={{ padding: '20px 22px', flex: 1, minWidth: 150 }}>
-      <Text style={{ color: 'var(--text-tertiary)', fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 10 }}>
+      <Text style={{ color: 'var(--text-tertiary)', fontSize: 14, fontWeight: 500, display: 'block', marginBottom: 10 }}>
         {label}
       </Text>
       <div className="metric-value" style={{
         color: danger ? 'var(--red)' : highlight ? 'var(--blue)' : 'var(--text-primary)',
       }}>
         {typeof value === 'number' ? value.toLocaleString() : value}
-        {suffix && <span style={{ fontSize: 13, fontWeight: 400, marginLeft: 3, color: 'var(--text-tertiary)' }}>{suffix}</span>}
+        {suffix && <span style={{ fontSize: 15, fontWeight: 400, marginLeft: 3, color: 'var(--text-tertiary)' }}>{suffix}</span>}
       </div>
     </div>
   )
@@ -78,21 +78,21 @@ export default function Dashboard() {
 
   const tooltipBase = {
     backgroundColor: cTooltip, borderColor: cGrid, borderWidth: 1,
-    textStyle: { color: isDark ? '#F4F4F5' : '#0D0D0D', fontSize: 12 },
+    textStyle: { color: isDark ? '#F4F4F5' : '#0D0D0D', fontSize: 14 },
     extraCssText: 'border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,0.08);padding:8px 12px;',
   }
 
   const trendOption = {
     tooltip: { trigger: 'axis', ...tooltipBase, axisPointer: { type: 'line', lineStyle: { color: cGrid } } },
-    legend: { data: ['对话量', 'Prompt', 'Completion'], textStyle: { color: cText, fontSize: 11 },
+    legend: { data: ['对话量', 'Prompt', 'Completion'], textStyle: { color: cText, fontSize: 13 },
       bottom: 0, icon: 'roundRect', itemWidth: 12, itemHeight: 2, itemGap: 24 },
     grid: { left: 44, right: 44, top: 16, bottom: 36 },
     xAxis: { type: 'category', data: trend.map(t => t.date.slice(5)),
       axisLine: { lineStyle: { color: cGrid } }, axisTick: { show: false },
-      axisLabel: { color: cText, fontSize: 11, margin: 12 } },
+      axisLabel: { color: cText, fontSize: 13, margin: 12 } },
     yAxis: [
-      { type: 'value', splitLine: { lineStyle: { color: cGrid } }, axisLabel: { color: cText, fontSize: 11 }, axisLine: { show: false }, axisTick: { show: false } },
-      { type: 'value', splitLine: { show: false }, axisLabel: { color: cText, fontSize: 11 }, axisLine: { show: false }, axisTick: { show: false } },
+      { type: 'value', splitLine: { lineStyle: { color: cGrid } }, axisLabel: { color: cText, fontSize: 13 }, axisLine: { show: false }, axisTick: { show: false } },
+      { type: 'value', splitLine: { show: false }, axisLabel: { color: cText, fontSize: 13 }, axisLine: { show: false }, axisTick: { show: false } },
     ],
     series: [
       { name: '对话量', type: 'bar', barWidth: 12,
@@ -115,14 +115,14 @@ export default function Dashboard() {
     return {
       tooltip: { trigger: 'axis', ...tooltipBase, axisPointer: { type: 'shadow', shadowStyle: { color: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)' } } },
       grid: { left: 8, right: 44, top: 8, bottom: 8, containLabel: true },
-      xAxis: { type: 'value', splitLine: { lineStyle: { color: cGrid } }, axisLabel: { color: cText, fontSize: 11 }, axisLine: { show: false }, axisTick: { show: false } },
+      xAxis: { type: 'value', splitLine: { lineStyle: { color: cGrid } }, axisLabel: { color: cText, fontSize: 13 }, axisLine: { show: false }, axisTick: { show: false } },
       yAxis: { type: 'category', data: sorted.map(d => (d.key || '(空)').slice(0, 14)),
-        axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: cText, fontSize: 11, width: 110, overflow: 'truncate' } },
+        axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: cText, fontSize: 13, width: 110, overflow: 'truncate' } },
       series: [{
         type: 'bar', barWidth: 10,
         data: sorted.map((d, i) => ({ value: d.count,
           itemStyle: { color: i === sorted.length - 1 ? cLine1 : cBar, borderRadius: [0,3,3,0] } })),
-        label: { show: true, position: 'right', color: cText, fontSize: 11, fontWeight: 500, formatter: '{c}' },
+        label: { show: true, position: 'right', color: cText, fontSize: 13, fontWeight: 500, formatter: '{c}' },
       }],
     }
   }
@@ -147,15 +147,15 @@ export default function Dashboard() {
   // 模型效率表
   const modelColumns: ColumnsType<ModelStat> = [
     { title: '模型', dataIndex: 'model', ellipsis: true,
-      render: (v: string) => <Text style={{ fontSize: 12, fontWeight: 500 }}>{v}</Text> },
+      render: (v: string) => <Text style={{ fontSize: 14, fontWeight: 500 }}>{v}</Text> },
     { title: '对话', dataIndex: 'count', width: 70,
-      render: (v: number) => <Text style={{ fontSize: 12 }}>{v}</Text> },
+      render: (v: number) => <Text style={{ fontSize: 14 }}>{v}</Text> },
     { title: '均Prompt', dataIndex: 'avg_prompt', width: 90,
-      render: (v: number) => <Text style={{ fontSize: 12 }}>{Math.round(v)}</Text> },
+      render: (v: number) => <Text style={{ fontSize: 14 }}>{Math.round(v)}</Text> },
     { title: '均Completion', dataIndex: 'avg_completion', width: 100,
-      render: (v: number) => <Text style={{ fontSize: 12 }}>{Math.round(v)}</Text> },
+      render: (v: number) => <Text style={{ fontSize: 14 }}>{Math.round(v)}</Text> },
     { title: '均延迟', dataIndex: 'avg_latency', width: 80,
-      render: (v: number) => <Tag style={{ fontSize: 10 }}>{Math.round(v)}ms</Tag> },
+      render: (v: number) => <Tag style={{ fontSize: 12 }}>{Math.round(v)}ms</Tag> },
   ]
 
   return (
@@ -181,7 +181,7 @@ export default function Dashboard() {
           extra={
             <Tooltip title={`更新于 ${lastUpdate.toLocaleTimeString()}`}>
               <Button type="text" size="small" icon={<ReloadOutlined spin={refreshing} />}
-                onClick={() => loadAll(true)} style={{ color: 'var(--text-tertiary)', fontSize: 11 }} />
+                onClick={() => loadAll(true)} style={{ color: 'var(--text-tertiary)', fontSize: 13 }} />
             </Tooltip>
           }
         />

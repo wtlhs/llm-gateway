@@ -38,7 +38,7 @@ export function ThemeProvider({ children, locale }: { children: ReactNode; local
       colorBorder: '#26262A',
       colorBgElevated: '#131314',
       borderRadius: 6,
-      fontSize: 13,
+      fontSize: 14,
       colorText: '#F4F4F5',
       colorTextSecondary: '#A1A1A6',
       fontFamily: "-apple-system, BlinkMacSystemFont, 'Inter', 'PingFang SC', sans-serif",
@@ -47,7 +47,7 @@ export function ThemeProvider({ children, locale }: { children: ReactNode; local
       colorBgContainer: '#FFFFFF',
       colorBorder: '#ECECEE',
       borderRadius: 6,
-      fontSize: 13,
+      fontSize: 14,
       fontFamily: "-apple-system, BlinkMacSystemFont, 'Inter', 'PingFang SC', sans-serif",
     },
   }

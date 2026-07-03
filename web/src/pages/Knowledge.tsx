@@ -44,19 +44,19 @@ export default function Knowledge() {
 
   const columns: ColumnsType<SystemPromptSummary> = [
     { title: 'Agent', dataIndex: 'agent_name', ellipsis: true,
-      render: (v: string) => <Text style={{ fontSize: 12, fontWeight: 500 }}>{v || <Text type="secondary">未识别</Text>}</Text> },
+      render: (v: string) => <Text style={{ fontSize: 14, fontWeight: 500 }}>{v || <Text type="secondary">未识别</Text>}</Text> },
     { title: 'Hash', dataIndex: 'hash', width: 130, ellipsis: true,
-      render: (v: string) => <Text code style={{ fontSize: 10 }}>{v.slice(0, 16)}…</Text> },
+      render: (v: string) => <Text code style={{ fontSize: 12 }}>{v.slice(0, 16)}…</Text> },
     { title: '使用', dataIndex: 'use_count', width: 80,
-      render: (v: number) => <Tag color={v > 10 ? 'success' : v > 1 ? 'processing' : 'default'} style={{ fontSize: 10 }}>{v}</Tag> },
+      render: (v: number) => <Tag color={v > 10 ? 'success' : v > 1 ? 'processing' : 'default'} style={{ fontSize: 12 }}>{v}</Tag> },
     { title: '大小', dataIndex: 'content_size', width: 80,
-      render: (v: number) => <Text style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{v > 1024 ? `${(v/1024).toFixed(1)}KB` : `${v}B`}</Text> },
+      render: (v: number) => <Text style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>{v > 1024 ? `${(v/1024).toFixed(1)}KB` : `${v}B`}</Text> },
     { title: '首次出现', dataIndex: 'first_seen', width: 130,
-      render: (v: string) => <Text style={{ fontSize: 11 }}>{dayjs(v).format('MM-DD HH:mm')}</Text> },
+      render: (v: string) => <Text style={{ fontSize: 13 }}>{dayjs(v).format('MM-DD HH:mm')}</Text> },
     { title: '最近使用', dataIndex: 'last_seen', width: 130,
-      render: (v: string) => <Text style={{ fontSize: 11 }}>{dayjs(v).format('MM-DD HH:mm')}</Text> },
+      render: (v: string) => <Text style={{ fontSize: 13 }}>{dayjs(v).format('MM-DD HH:mm')}</Text> },
     { title: '', width: 60,
-      render: (_, r) => <a style={{ fontSize: 11 }} onClick={() => showContent(r.hash)}>查看</a> },
+      render: (_, r) => <a style={{ fontSize: 13 }} onClick={() => showContent(r.hash)}>查看</a> },
   ]
 
   return (
@@ -76,7 +76,7 @@ export default function Knowledge() {
         </Panel>
       )}
 
-      <Paragraph type="secondary" style={{ fontSize: 11, marginBottom: 12 }}>
+      <Paragraph type="secondary" style={{ fontSize: 13, marginBottom: 12 }}>
         从对话流量自动沉淀的 Agent 配置, 按 hash 去重存储。同一 Agent 的多次请求只存一份配置。
       </Paragraph>
 
@@ -100,7 +100,7 @@ export default function Knowledge() {
         {detailLoading ? <div style={{ textAlign: 'center', padding: 60 }}><Spin /></div> : (
           <pre style={{
             background: '#0F0F11', color: '#d4d4d4', padding: 16,
-            borderRadius: 6, overflow: 'auto', fontSize: 13,
+            borderRadius: 6, overflow: 'auto', fontSize: 15,
             fontFamily: 'Consolas, Monaco, monospace', whiteSpace: 'pre-wrap',
             maxHeight: '78vh', border: '1px solid var(--border-color)',
           }}>

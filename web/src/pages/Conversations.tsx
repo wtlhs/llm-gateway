@@ -48,37 +48,37 @@ export default function Conversations() {
 
   const columns: ColumnsType<ConversationSummary> = [
     { title: 'ID', dataIndex: 'id', width: 75, fixed: 'left',
-      render: (v: number) => <Text style={{ fontSize: 11, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums' }}>{v}</Text> },
+      render: (v: number) => <Text style={{ fontSize: 13, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums' }}>{v}</Text> },
     { title: '时间', dataIndex: 'created_at', width: 145, fixed: 'left',
-      render: (v: string) => <Text style={{ fontSize: 11 }}>{dayjs(v).format('MM-DD HH:mm:ss')}</Text> },
+      render: (v: string) => <Text style={{ fontSize: 13 }}>{dayjs(v).format('MM-DD HH:mm:ss')}</Text> },
     { title: '模型', dataIndex: 'model', width: 110,
-      render: (v: string) => <Text style={{ fontSize: 11 }}>{v || '-'}</Text> },
+      render: (v: string) => <Text style={{ fontSize: 13 }}>{v || '-'}</Text> },
     { title: '端点', dataIndex: 'endpoint', width: 130,
-      render: (v: string) => <Tag style={{ fontSize: 10 }}>{v}</Tag> },
+      render: (v: string) => <Tag style={{ fontSize: 12 }}>{v}</Tag> },
     { title: '调用方', dataIndex: 'caller_tag', width: 150, ellipsis: true,
-      render: (v: string) => <Text style={{ fontSize: 11 }}>{v || '-'}</Text> },
+      render: (v: string) => <Text style={{ fontSize: 13 }}>{v || '-'}</Text> },
     { title: '流', dataIndex: 'is_stream', width: 50,
-      render: (v: boolean) => <Tag color={v ? 'blue' : 'default'} style={{ fontSize: 10 }}>{v ? '流' : '非'}</Tag> },
+      render: (v: boolean) => <Tag color={v ? 'blue' : 'default'} style={{ fontSize: 12 }}>{v ? '流' : '非'}</Tag> },
     { title: '状态', dataIndex: 'http_status', width: 65,
-      render: (v: number) => <Tag color={v < 400 ? 'success' : 'error'} style={{ fontSize: 10 }}>{v}</Tag> },
+      render: (v: number) => <Tag color={v < 400 ? 'success' : 'error'} style={{ fontSize: 12 }}>{v}</Tag> },
     { title: 'P.Tok', dataIndex: 'prompt_tokens', width: 75,
-      render: (v: number) => <Text style={{ fontSize: 11, color: v ? 'var(--text-primary)' : 'var(--text-tertiary)' }}>{v || '-'}</Text> },
+      render: (v: number) => <Text style={{ fontSize: 13, color: v ? 'var(--text-primary)' : 'var(--text-tertiary)' }}>{v || '-'}</Text> },
     { title: 'C.Tok', dataIndex: 'completion_tokens', width: 75,
-      render: (v: number) => <Text style={{ fontSize: 11, color: v ? 'var(--text-primary)' : 'var(--text-tertiary)' }}>{v || '-'}</Text> },
+      render: (v: number) => <Text style={{ fontSize: 13, color: v ? 'var(--text-primary)' : 'var(--text-tertiary)' }}>{v || '-'}</Text> },
     { title: '延迟', dataIndex: 'upstream_latency_ms', width: 75,
       render: (v: number) => {
         const color = v > 20000 ? 'var(--red)' : v > 10000 ? 'var(--amber)' : undefined
-        return <Text style={{ fontSize: 11, color, fontVariantNumeric: 'tabular-nums' }}>{v ? `${(v/1000).toFixed(1)}s` : '-'}</Text>
+        return <Text style={{ fontSize: 13, color, fontVariantNumeric: 'tabular-nums' }}>{v ? `${(v/1000).toFixed(1)}s` : '-'}</Text>
       } },
     { title: '截', dataIndex: 'truncated', width: 45,
-      render: (v: boolean) => v ? <Tag color="warning" style={{ fontSize: 10 }}>截</Tag> : '' },
+      render: (v: boolean) => v ? <Tag color="warning" style={{ fontSize: 12 }}>截</Tag> : '' },
     { title: '', width: 60, fixed: 'right',
-      render: (_, r) => <a style={{ fontSize: 11 }} onClick={() => showDetail(r.id)}>详情</a> },
+      render: (_, r) => <a style={{ fontSize: 13 }} onClick={() => showDetail(r.id)}>详情</a> },
   ]
 
   const codeBlockStyle: React.CSSProperties = {
     background: 'var(--bg-hover)', padding: 14, borderRadius: 6,
-    maxHeight: 240, overflow: 'auto', fontSize: 12,
+    maxHeight: 240, overflow: 'auto', fontSize: 14,
     border: '1px solid var(--border-color)', fontFamily: 'Consolas, Monaco, monospace',
     whiteSpace: 'pre-wrap', wordBreak: 'break-all',
   }
@@ -130,25 +130,25 @@ export default function Conversations() {
               <Descriptions.Item label="时间">{dayjs(detail.created_at).format('YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
               {detail.system_prompt_hash && (
                 <Descriptions.Item label="System" span={2}>
-                  <Text code style={{ fontSize: 10 }}>{detail.system_prompt_hash.slice(0, 24)}...</Text>
+                  <Text code style={{ fontSize: 12 }}>{detail.system_prompt_hash.slice(0, 24)}...</Text>
                 </Descriptions.Item>
               )}
               {detail.error_message && (
                 <Descriptions.Item label="错误" span={2}>
-                  <Text type="danger" style={{ fontSize: 11 }}>{detail.error_message}</Text>
+                  <Text type="danger" style={{ fontSize: 13 }}>{detail.error_message}</Text>
                 </Descriptions.Item>
               )}
             </Descriptions>
 
-            <Text strong style={{ fontSize: 12, display: 'block', margin: '16px 0 8px' }}>Prompt</Text>
+            <Text strong style={{ fontSize: 14, display: 'block', margin: '16px 0 8px' }}>Prompt</Text>
             <pre style={codeBlockStyle}>{JSON.stringify(detail.prompt_text, null, 2)}</pre>
 
-            <Text strong style={{ fontSize: 12, display: 'block', margin: '16px 0 8px' }}>Completion</Text>
+            <Text strong style={{ fontSize: 14, display: 'block', margin: '16px 0 8px' }}>Completion</Text>
             <pre style={codeBlockStyle}>{JSON.stringify(detail.completion_text, null, 2)}</pre>
 
             {detail.tool_calls && (
               <>
-                <Text strong style={{ fontSize: 12, display: 'block', margin: '16px 0 8px' }}>Tool Calls</Text>
+                <Text strong style={{ fontSize: 14, display: 'block', margin: '16px 0 8px' }}>Tool Calls</Text>
                 <pre style={codeBlockStyle}>{JSON.stringify(detail.tool_calls, null, 2)}</pre>
               </>
             )}
