@@ -86,7 +86,14 @@ func (t *captureTransport) Forward(r *http.Request) (*http.Response, *audit.Reco
 	if isCapture && r.Body != nil {
 		snap, err := snapshotBody(r, t.cfg.PreBodyMaxBytes, t.cfg.MaxBodyBytes)
 		if err != nil {
-			if rec != nil {
+			if errors.Is(err, ErrBodyTooLarge) {
+				// 修复(2026-08-04): 请求体超 preMax(32MB, 常见于 1M 上下文+图片附件)。
+				// 原实现静默截断 raw → 残缺 body 透传 → New API 解析失败, 客户端报
+				// "Request too large (max 32MB)"。现在跳过审计(rec=nil), r.Body 保持
+				// 原始未读, 完整透传; 捕获是尽力而为, 绝不影响转发。
+				metrics.RequestTotal.WithLabelValues(endpoint, "unknown", callerLabel(tokenHash), "capture-skip").Inc()
+				rec = nil
+			} else if rec != nil {
 				rec.Truncated = true
 			}
 		} else if len(snap.decoded) > 0 {

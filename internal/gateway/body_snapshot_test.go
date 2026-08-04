@@ -3,6 +3,9 @@ package gateway
 import (
 	"bytes"
 	"compress/gzip"
+	"errors"
+	"io"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -104,6 +107,51 @@ func TestDecodeMaybe_TruncationTail_Gzip(t *testing.T) {
 	joined := string(tail)
 	if !strings.Contains(joined, "\"model\":\"glm-5.2\"") || !strings.Contains(joined, "\"stream\":true") {
 		t.Fatalf("gzip tail missing model/stream: %q", joined)
+	}
+}
+
+// TestReadBounded_OverLimit 回归(2026-08-04): 请求体超过 preMax 时必须返回
+// ErrBodyTooLarge, 不能静默截断——否则 restoreBody 把残缺 body 透传上游,
+// New API 收到损坏 JSON, 客户端报 "Request too large (max 32MB)"。
+func TestReadBounded_OverLimit(t *testing.T) {
+	// 40MB 请求体(1M 上下文 + 图片附件场景)
+	big := bytes.Repeat([]byte("a"), 40*1024*1024)
+	raw, err := readBounded(bytes.NewReader(big), 32*1024*1024)
+	if !errors.Is(err, ErrBodyTooLarge) {
+		t.Fatalf("expected ErrBodyTooLarge, got %v", err)
+	}
+	if len(raw) != 32*1024*1024+1 {
+		t.Fatalf("raw len = %d, want 32MB+1 (LimitReader 行为)", len(raw))
+	}
+
+	// 未超限时正常返回且不报错
+	small := []byte(`{"model":"gpt-4o","messages":[]}`)
+	got, err := readBounded(bytes.NewReader(small), 1<<20)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if string(got) != string(small) {
+		t.Fatalf("mismatch: %q", got)
+	}
+}
+
+// TestSnapshotBody_OverLimit_PreservesBody 回归: snapshotBody 超限报错时
+// 不得关闭/改写 r.Body, 保证调用方可完整透传原始请求。
+func TestSnapshotBody_OverLimit_PreservesBody(t *testing.T) {
+	big := bytes.Repeat([]byte("b"), 40*1024*1024)
+	r := httptest.NewRequest("POST", "/v1/messages", bytes.NewReader(big))
+
+	_, err := snapshotBody(r, 32*1024*1024, 1<<20)
+	if !errors.Is(err, ErrBodyTooLarge) {
+		t.Fatalf("expected ErrBodyTooLarge, got %v", err)
+	}
+	// r.Body 必须未被关闭/改写: 仍可完整读回 40MB(供 RoundTrip 透传)
+	n, rerr := io.Copy(io.Discard, r.Body)
+	if rerr != nil {
+		t.Fatalf("body read failed: %v", rerr)
+	}
+	if n != int64(len(big)) {
+		t.Fatalf("body len = %d, want %d (必须完整透传)", n, len(big))
 	}
 }
 

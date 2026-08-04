@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -25,15 +26,37 @@ type bodySnapshot struct {
 //
 // 关键(K2): r.Body 只能读一次。读完 raw 后, 用 raw 还原 r.Body,
 // 这样 base.RoundTrip(r) 仍能把原始字节发给 New API。
+//
+// 修复(2026-08-04): 请求体超过 preMax 时, 原实现用 io.LimitReader(max+1) 静默
+// 截断 raw, restoreBody 把残缺 body 还原 → 透传给 New API 的 JSON 被截断,
+// 客户端报 "Request too large (max 32MB)"。现在:
+//   - readBounded 超限返回 ErrBodyTooLarge(不再静默截断)
+//   - 出错时**不关闭 r.Body**(保持原始未读状态), 由调用方跳过审计后完整透传
+//   - 捕获是尽力而为, 绝不影响转发(透明代理原则)
 func snapshotBody(r *http.Request, preMax, postMax int64) (bodySnapshot, error) {
 	var snap bodySnapshot
 
 	raw, err := readBounded(r.Body, preMax) // 硬上限防解压炸弹
-	if cerr := r.Body.Close(); cerr != nil && err == nil {
-		err = cerr
-	}
 	if err != nil {
-		return snap, err
+		// 修复(2026-08-04): 请求体超 preMax(32MB, 常见于 1M 上下文+图片附件)。
+		// readBounded 用 LimitReader 已消费前 preMax+1 字节, 剩余字节仍在 r.Body。
+		// 组合已读部分 + 剩余部分还原为完整 body, 保证透传不损坏(捕获尽力而为,
+		// 绝不影响转发)。返回错误供调用方跳过审计。
+		combined := io.MultiReader(bytes.NewReader(raw), r.Body)
+		r.Body = io.NopCloser(combined)
+		if r.ContentLength > 0 && r.ContentLength > preMax {
+			// 保留原始 ContentLength(客户端已声明完整长度), MultiReader 读满即 EOF
+		} else {
+			r.ContentLength = -1 // 未知长度 → 上游按 EOF 判结束
+		}
+		if r.GetBody != nil {
+			// 重试路径需要可重读 body; 超限场景放弃 GetBody(ReverseProxy 重试会退化为失败)
+			r.GetBody = nil
+		}
+		return snap, ErrBodyTooLarge
+	}
+	if cerr := r.Body.Close(); cerr != nil {
+		return snap, cerr
 	}
 	snap.raw = raw
 
@@ -53,6 +76,9 @@ func snapshotBody(r *http.Request, preMax, postMax int64) (bodySnapshot, error) 
 	return snap, nil
 }
 
+// ErrBodyTooLarge 请求体超过 preMax 上限(防解压炸弹/内存), 捕获失败但需完整透传。
+var ErrBodyTooLarge = errors.New("request body exceeds capture preMax limit")
+
 // restoreBody 用原字节重置 r.Body, 供 RoundTrip 转发。
 // 同时重设 ContentLength 与 GetBody(ReverseProxy 重试路径会用 GetBody)。
 func restoreBody(r *http.Request, raw []byte) {
@@ -66,11 +92,18 @@ func restoreBody(r *http.Request, raw []byte) {
 	}
 }
 
-// readBounded 读取 reader, 最多 max 字节; 超过则返回已读部分 + 错误(防 OOM/解压炸弹)。
+// readBounded 读取 reader, 最多 max 字节; 超过则返回已读部分 + ErrBodyTooLarge
+// (防 OOM/解压炸弹)。修复: 原实现用 io.LimitReader(max+1) 静默截断不报错,
+// 调用方误以为 raw 完整, 把残缺 body 透传上游导致请求损坏。
 func readBounded(r io.Reader, max int64) ([]byte, error) {
-	return io.ReadAll(io.LimitReader(r, max+1))
-	// 注: 若实际 > max, ReadAll 会读 max+1 字节, 调用方据长度判断截断;
-	// Phase1 保守: 超大请求视为异常, 见 transport 层处理。
+	raw, err := io.ReadAll(io.LimitReader(r, max+1))
+	if err != nil {
+		return raw, err
+	}
+	if int64(len(raw)) > max {
+		return raw, ErrBodyTooLarge
+	}
+	return raw, nil
 }
 
 // decodeMaybe 按 Content-Encoding 解压, 上限 postMax 截断。
