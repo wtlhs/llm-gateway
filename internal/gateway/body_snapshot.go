@@ -15,6 +15,7 @@ import (
 type bodySnapshot struct {
 	raw       []byte // 原始字节(可能是压缩的)→ 还原给 New API
 	decoded   []byte // 解压后字节(用于落库 prompt)
+	tail      []byte // 截断时保留的尾部字节(供 model/stream 探测; 仅 truncated 时非空)
 	truncated bool   // decoded 是否触发 postBodyMaxBytes 截断
 	decodeErr bool   // 解压失败(C6: 记 metric, 不静默)
 }
@@ -37,12 +38,13 @@ func snapshotBody(r *http.Request, preMax, postMax int64) (bodySnapshot, error) 
 	snap.raw = raw
 
 	// 解压副本(仅用于落库; 透传的是 raw)
-	dec, trunc, derr := decodeMaybe(raw, r.Header.Get("Content-Encoding"), postMax)
+	dec, tail, trunc, derr := decodeMaybe(raw, r.Header.Get("Content-Encoding"), postMax)
 	if derr != nil {
 		snap.decodeErr = true
 		metrics.DecodeFailed.Inc()
 	} else {
 		snap.decoded = dec
+		snap.tail = tail
 		snap.truncated = trunc
 	}
 
@@ -72,14 +74,19 @@ func readBounded(r io.Reader, max int64) ([]byte, error) {
 }
 
 // decodeMaybe 按 Content-Encoding 解压, 上限 postMax 截断。
-// 返回 (decoded, truncated, err)。identity 或空编码直接返回(受 postMax 截断)。
-func decodeMaybe(raw []byte, encoding string, postMax int64) ([]byte, bool, error) {
+// 返回 (decoded, tail, truncated, err)。
+//   - decoded: 解压后前 postMax 字节(用于落库 prompt)
+//   - tail: 截断时保留的最后 postMax 字节(用于 model/stream 探测, 因头部截断后
+//     关键字段可能位于请求体尾部); 未截断时为 nil
+//   - truncated: 是否触发截断
+// identity 或空编码直接返回(受 postMax 截断)。
+func decodeMaybe(raw []byte, encoding string, postMax int64) ([]byte, []byte, bool, error) {
 	encoding = normalizeEncoding(encoding)
 	switch encoding {
 	case "gzip":
 		zr, err := gzip.NewReader(bytes.NewReader(raw))
 		if err != nil {
-			return nil, false, err
+			return nil, nil, false, err
 		}
 		return readBoundedTrunc(zr, postMax)
 	case "br":
@@ -88,34 +95,49 @@ func decodeMaybe(raw []byte, encoding string, postMax int64) ([]byte, bool, erro
 	default: // identity / 空
 		// 原样, 但仍受 postMax 截断(超长 prompt 也需截断)
 		if int64(len(raw)) > postMax {
-			return raw[:postMax], true, nil
+			return raw[:postMax], raw[int64(len(raw))-postMax:], true, nil
 		}
-		return raw, false, nil
+		return raw, nil, false, nil
 	}
 }
 
-// readBoundedTrunc 读到 max 后停止, 标记 truncated。
-func readBoundedTrunc(r io.Reader, max int64) ([]byte, bool, error) {
+// readBoundedTrunc 读完整个解压流(防尾部丢失), 保留前 max 字节为 head,
+// 最后 max 字节为 tail(供 model/stream 探测)。返回 (head, tail, truncated, err)。
+// 注: 必须读完整流才能拿到真实尾部——头部截断后关键字段(model/stream)可能在
+// 流末尾, 提前返回会丢失尾部窗口导致 is_stream 误判。
+func readBoundedTrunc(r io.Reader, max int64) ([]byte, []byte, bool, error) {
 	buf := make([]byte, 0, max)
+	var tailBuf []byte
 	tmp := make([]byte, 32*1024)
 	trunc := false
 	for {
 		n, err := r.Read(tmp)
 		if n > 0 {
-			room := max - int64(len(buf))
-			if int64(n) <= room {
-				buf = append(buf, tmp[:n]...)
-			} else {
-				buf = append(buf, tmp[:room]...)
-				trunc = true
-				return buf, trunc, nil
+			chunk := tmp[:n]
+			// 头部累积到 max 后停止(trunc 标记)
+			if !trunc {
+				room := max - int64(len(buf))
+				if int64(n) <= room {
+					buf = append(buf, chunk...)
+				} else {
+					buf = append(buf, chunk[:room]...)
+					trunc = true
+				}
+			}
+			// 尾部窗口: 始终保留最近 max 字节
+			tailBuf = append(tailBuf, chunk...)
+			if int64(len(tailBuf)) > max {
+				tailBuf = tailBuf[int64(len(tailBuf))-max:]
 			}
 		}
 		if err == io.EOF {
-			return buf, trunc, nil
+			if trunc {
+				return buf, tailBuf, true, nil
+			}
+			return buf, nil, false, nil
 		}
 		if err != nil {
-			return buf, trunc, err
+			return buf, tailBuf, trunc, err
 		}
 	}
 }

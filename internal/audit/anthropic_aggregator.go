@@ -26,11 +26,12 @@ type anthropicAggregator struct {
 	// 工具调用: index → 入参 JSON 分片拼接(input_json_delta.partial_json)
 	toolIdx map[int]*strings.Builder
 
-	// usage / finish
+	// usage / finish / error
 	promptTokens     int32 // 来自 message_start.usage.input_tokens
 	completionTokens int32 // 来自 message_delta.usage.output_tokens
 	finishReason     string // 来自 message_delta.delta.stop_reason
 	stopReason       string // 原始 stop_reason(end_turn/max_tokens/tool_use/...)
+	errorMessage     string // error 事件内容
 }
 
 func newAnthropicAggregator() *anthropicAggregator {
@@ -84,7 +85,21 @@ func (a *anthropicAggregator) parseEvent(event string, data []byte) {
 	case "message_stop":
 		// 流结束, 无额外数据
 	case "error":
-		// 错误事件, 记录但不影响已累积内容
+		// 错误事件, 记录到 errorMessage 但不影响已累积内容
+		var errEvt struct {
+			Error struct {
+				Message string `json:"message"`
+				Type    string `json:"type"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(data, &errEvt) == nil {
+			a.errorMessage = errEvt.Error.Message
+			if errEvt.Error.Type != "" {
+				a.errorMessage += " (type: " + errEvt.Error.Type + ")"
+			}
+		} else {
+			a.errorMessage = string(data)
+		}
 	}
 }
 
@@ -194,6 +209,9 @@ func (a *anthropicAggregator) completion() []byte {
 			},
 			"finish_reason": a.finishReason,
 		}},
+	}
+	if a.errorMessage != "" {
+		out["error"] = a.errorMessage
 	}
 	b, _ := json.Marshal(out)
 	return b

@@ -27,3 +27,7 @@ web/dist/
 Thumbs.db
 llm-gateway.tar
 web/tsconfig.tsbuildinfo
+
+# 交叉编译产物(本地构建用, 不入库)
+llm-gateway-linux
+

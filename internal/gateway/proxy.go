@@ -56,8 +56,24 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 响应体处理: 分流式/非流式
 	if rec != nil && rec.IsStream {
-		// 流式(K1): sseCaptureLoop 边透传边聚合, 结束后 push(M1)
-		sseCaptureLoop(ctx, resp.Body, w, rec, p.transport.pushRecord, p.maxBytes, rec.UpstreamT0)
+		if resp.StatusCode >= 400 {
+			// 流式请求但上游返回错误: 此时响应体不是 SSE 流, 而是厂商的 JSON 错误响应
+			// (如 429 限流 / 500 / 模型不存在)。读完整错误体, 透传 + SetError,
+			// 让 error_message 落库厂商具体报错(与非流式错误路径一致)。
+			buf, _ := io.ReadAll(io.LimitReader(resp.Body, p.maxBytes+1))
+			if int64(len(buf)) > p.maxBytes {
+				buf = buf[:p.maxBytes]
+				rec.Truncated = true
+			}
+			w.Write(buf)
+			rec.UpstreamLatencyMs = int32(time.Since(rec.UpstreamT0).Milliseconds())
+			rec.Finalize()
+			rec.SetError(resp.StatusCode, buf)
+			p.transport.pushRecord(rec)
+		} else {
+			// 流式(K1): sseCaptureLoop 边透传边聚合, 结束后 push(M1)
+			sseCaptureLoop(ctx, resp.Body, w, rec, p.transport.pushRecord, p.maxBytes, rec.UpstreamT0)
+		}
 	} else if rec != nil {
 		// 非流式: 透传 + 累积副本, 结束后 push
 		buf, _ := io.ReadAll(io.LimitReader(resp.Body, p.maxBytes+1))

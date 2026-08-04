@@ -98,7 +98,7 @@ INSERT INTO llm_conversation (
     tool_calls, request_body_hash, http_status, prompt_tokens, completion_tokens,
     error_message, client_ip, redacted, truncated, upstream_latency_ms,
     total_latency_ms, version, system_prompt_hash, system_prompt_size
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,1,$23,$24,$25)
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,1,$24,$25)
 ON CONFLICT (request_id) DO NOTHING
 RETURNING id;`
 	tag, err := s.pool.Exec(ctx, sql,

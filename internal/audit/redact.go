@@ -26,15 +26,20 @@ var redactRules = []struct {
 //   - ModeFull:  不脱敏(仅受控环境)
 //   - ModeRedact: 对 prompt_text / completion_text 应用规则, redacted=true
 //   - ModeOff:   调用方应在 pipeline 跳过落库, 但此处也保证不会误存
+//
+// 重要: 脱敏是字节级正则替换, 可能破坏 JSON 结构——bankcard 等规则
+// `\b\d{16,19}\b` 会误匹配 JSON 里的数字字面量(如 max_tokens 等 16 位参数),
+// 替换成 `****4321` 后 JSON 变为非法(被 PG JSONB 拒绝, SQLSTATE 22P02)。
+// 因此脱敏后必须重新过 safeJSON: 非法结果包成 {"raw": "..."} 保证落库成功。
 func Apply(rec *Record, mode config.Mode) {
 	if mode != config.ModeRedact {
 		return
 	}
 	if len(rec.PromptText) > 0 {
-		rec.PromptText = redactBytes(rec.PromptText)
+		rec.PromptText = safeJSON(redactBytes(rec.PromptText))
 	}
 	if len(rec.CompletionText) > 0 {
-		rec.CompletionText = redactBytes(rec.CompletionText)
+		rec.CompletionText = safeJSON(redactBytes(rec.CompletionText))
 	}
 	rec.Redacted = true
 }

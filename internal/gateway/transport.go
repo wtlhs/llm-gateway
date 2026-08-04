@@ -96,7 +96,7 @@ func (t *captureTransport) Forward(r *http.Request) (*http.Response, *audit.Reco
 			if injectIncludeUsage(&snap, enc) {
 				restoreBody(r, snap.raw) // 用注入后的新字节重置 r.Body
 			}
-			rec.SetPrompt(snap.decoded, snap.truncated) // 落库用注入后的 decoded(含 stream_options)
+			rec.SetPrompt(snap.decoded, snap.tail, snap.truncated) // 落库用注入后的 decoded(含 stream_options)
 		}
 	}
 

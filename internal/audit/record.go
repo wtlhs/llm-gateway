@@ -5,9 +5,11 @@ package audit
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/company/llm-gateway/internal/metrics"
 )
@@ -95,11 +97,12 @@ func isAnthropicEndpoint(endpoint string) bool {
 }
 
 // SetPrompt 在请求 body 捕获后(§5.1.3)填充 prompt。
-// decoded 是解压后的请求体字节; truncated 表示是否触发 postBodyMaxBytes 截断。
+// decoded 是解压后的请求体字节; tail 是截断时保留的尾部(可能含 model/stream, 用于探测);
+// truncated 表示是否触发 postBodyMaxBytes 截断。
 // 同时做 system prompt 分流(知识资产层, docs/KNOWLEDGE_LAYER.md §4.1):
 // 从请求体提取 system prompt → 单独存(供 pipeline upsert 到 system_prompts 表),
 // prompt_text 只保留 user/assistant/tool 消息。
-func (rec *Record) SetPrompt(decoded []byte, truncated bool) {
+func (rec *Record) SetPrompt(decoded, tail []byte, truncated bool) {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 
@@ -119,24 +122,46 @@ func (rec *Record) SetPrompt(decoded []byte, truncated bool) {
 	rec.PromptText = json.RawMessage(safeJSON(slimmed))
 	rec.Truncated = truncated
 	// 从(精简后的)prompt 提取 model / is_stream
-	rec.extractPromptMeta(slimmed)
+	// 截断场景: model/stream 可能在请求体尾部(system 之前/之后), 用 head+tail 拼接探测
+	probe := slimmed
+	if truncated && len(tail) > 0 {
+		probe = append(append([]byte{}, slimmed...), tail...)
+	}
+	rec.extractPromptMeta(probe)
 }
 
+// 顶层 model/stream 字段正则: 用于请求体被 postMax(MaxBodyBytes) 截断后的容错探测。
+// model/stream 位于 JSON 头部, 截断后仍完整, 而整体 json.Unmarshal 会因残缺 JSON 失败。
+var (
+	modelFieldRe  = regexp.MustCompile(`"model"\s*:\s*"([^"]+)"`)
+	streamFieldRe = regexp.MustCompile(`"stream"\s*:\s*(true|false)`)
+)
+
 // extractPromptMeta 从请求体里尽力提取 model 字段(用于落库 + 限流旁路)。
+// 修复(截断误判): 大上下文请求(Anthropic /v1/messages 常 > MaxBodyBytes)被截断后
+// json.Unmarshal 整体失败 → stream 探测不到 → is_stream=false → 网关误走非流式路径,
+// 流式响应被缓冲, 客户端等不到数据超时断开, New API 侧表现为 client_gone。
+// 此处 Unmarshal 失败时回退到正则探测(字段在 JSON 头部, 截断不破坏)。
 func (rec *Record) extractPromptMeta(body []byte) {
 	var probe struct {
 		Model  string `json:"model"`
 		Stream bool   `json:"stream"`
 	}
-	if json.Unmarshal(body, &probe) == nil {
-		if rec.Model == "" {
-			rec.Model = probe.Model
+	if json.Unmarshal(body, &probe) != nil {
+		if m := modelFieldRe.FindSubmatch(body); m != nil {
+			probe.Model = string(m[1])
 		}
-		// 流式判定: 若检测到 stream=true, 延迟创建聚合器(NewRecord 阶段 stream 未知, agg 可能为 nil)
-		if probe.Stream && !rec.IsStream {
-			rec.IsStream = true
-			rec.ensureAggregator()
+		if s := streamFieldRe.FindSubmatch(body); s != nil {
+			probe.Stream = string(s[1]) == "true"
 		}
+	}
+	if rec.Model == "" {
+		rec.Model = probe.Model
+	}
+	// 流式判定: 若检测到 stream=true, 延迟创建聚合器(NewRecord 阶段 stream 未知, agg 可能为 nil)
+	if probe.Stream && !rec.IsStream {
+		rec.IsStream = true
+		rec.ensureAggregator()
 	}
 }
 
@@ -178,6 +203,8 @@ func (rec *Record) AppendCapture(chunk []byte, maxBytes int64) {
 
 // Finalize 在响应流结束后(§5.2)组装 completion。
 // 按端点格式从对应聚合器提取归一化结果。
+// 同时把流内 error 事件(SSE 中的 error)回填到 ErrorMessage(若尚未由 SetError/
+// SetStreamError 设置), 使流内错误也能进 error_message 列、被 dashboard 错误计数识别。
 func (rec *Record) Finalize() {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
@@ -187,11 +214,17 @@ func (rec *Record) Finalize() {
 		rec.ToolCalls = rec.anthAgg.toolCalls()
 		rec.PromptTokens = rec.anthAgg.promptTokens
 		rec.CompletionTokens = rec.anthAgg.completionTokens
+		if rec.ErrorMessage == "" && rec.anthAgg.errorMessage != "" {
+			rec.ErrorMessage = truncStr(rec.anthAgg.errorMessage, 4096)
+		}
 	} else if rec.agg != nil {
 		rec.CompletionText = rec.agg.completion()
 		rec.ToolCalls = rec.agg.toolCalls()
 		rec.PromptTokens = rec.agg.promptTokens
 		rec.CompletionTokens = rec.agg.completionTokens
+		if rec.ErrorMessage == "" && rec.agg.errorMessage != "" {
+			rec.ErrorMessage = truncStr(rec.agg.errorMessage, 4096)
+		}
 	}
 }
 
@@ -236,6 +269,20 @@ func (rec *Record) SetError(status int, body []byte) {
 	if status >= 400 {
 		rec.ErrorMessage = truncStr(string(body), 4096)
 	}
+}
+
+// SetStreamError 记录流式响应中断时的诊断信息。
+// reason 为中断原因(如 "client gone" / "context canceled" / "upstream read error"),
+// lastChunk 为上游最后一段原始数据, 可能包含厂商/上游返回的 SSE 错误事件。
+func (rec *Record) SetStreamError(status int, reason string, lastChunk []byte) {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	rec.HTTPStatus = status
+	msg := reason
+	if len(lastChunk) > 0 {
+		msg += " | last_upstream_chunk: " + truncStr(string(lastChunk), 4096)
+	}
+	rec.ErrorMessage = truncStr(msg, 4096)
 }
 
 // ModelSafe 返回 model 名(空则 "unknown"), 用于 metrics label。
@@ -307,11 +354,13 @@ func clientIP(r *http.Request) string {
 // 注意: raw 保留全文不二次截断——截断已由 decodeMaybe 的 postMax(MaxBodyBytes)统一控制,
 // 这里再截会破坏数据完整性(coding agent 的 system prompt 会被砍, 看不到用户问题)。
 // 若原文超长, decodeMaybe 已在上游截断并标记 truncated, 此处只负责包装不合法的残缺 JSON。
+// 额外: json.Valid 只校验语法, 不校验 UTF-8 合法性——含非法 UTF-8 字节的 JSON 会通过
+// json.Valid 但被 PostgreSQL JSONB 拒绝(SQLSTATE 22P02), 因此必须同时校验 utf8.Valid。
 func safeJSON(b []byte) []byte {
 	if len(b) == 0 {
 		return []byte("{}")
 	}
-	if json.Valid(b) {
+	if json.Valid(b) && utf8.Valid(b) {
 		return b
 	}
 	wrapped, _ := json.Marshal(map[string]string{"raw": string(b)})

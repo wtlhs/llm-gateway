@@ -27,11 +27,12 @@ type sseAggregator struct {
 	// 工具调用: index → 已拼接的 JSON 字符串(tool_calls 数组里按 index 对齐)
 	toolIdx map[int]*strings.Builder
 
-	// usage / finish
+	// usage / finish / error
 	promptTokens     int32
 	completionTokens int32
 	finishReason     string
 	done             bool
+	errorMessage     string
 }
 
 func newSSEAggregator() *sseAggregator {
@@ -69,6 +70,11 @@ func (a *sseAggregator) append(chunk []byte) {
 // parseChunk 解析单个 data: 行的 JSON。
 func (a *sseAggregator) parseChunk(data []byte) {
 	var ch struct {
+		Error *struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    any    `json:"code"`
+		} `json:"error"`
 		Choices []struct {
 			Index int `json:"index"`
 			Delta struct {
@@ -93,6 +99,15 @@ func (a *sseAggregator) parseChunk(data []byte) {
 	}
 	if json.Unmarshal(data, &ch) != nil {
 		return
+	}
+	if ch.Error != nil {
+		a.errorMessage = ch.Error.Message
+		if ch.Error.Type != "" {
+			a.errorMessage += " (type: " + ch.Error.Type + ")"
+		}
+		if code, _ := json.Marshal(ch.Error.Code); string(code) != "null" {
+			a.errorMessage += " (code: " + string(code) + ")"
+		}
 	}
 	if ch.Usage != nil {
 		a.promptTokens = ch.Usage.PromptTokens
@@ -133,6 +148,9 @@ func (a *sseAggregator) completion() []byte {
 			},
 			"finish_reason": a.finishReason,
 		}},
+	}
+	if a.errorMessage != "" {
+		out["error"] = a.errorMessage
 	}
 	b, _ := json.Marshal(out)
 	return b

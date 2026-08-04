@@ -179,6 +179,8 @@ func (p *Pipeline) persist(ctx context.Context, rec *Record) {
 	if err != nil {
 		if errors.Is(err, db.ErrDuplicate) {
 			// 幂等命中, 不算错误
+			// TEMP-DIAG: 打印重复的 request_id, 用于定位 44 次 ErrDuplicate 来源
+			slog.Warn("insert duplicate (diag)", "request_id", rec.GatewayID, "upstream", rec.UpstreamRequestID, "model", rec.Model, "ts", rec.startedAt.Format(time.RFC3339))
 			return
 		}
 		metrics.DBInsertErrors.Inc()

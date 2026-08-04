@@ -76,10 +76,10 @@ var (
 
 // --- 流式健康 (M2) ---
 var (
-	StreamInterrupted = reg.NewCounter(prometheus.CounterOpts{
+	StreamInterrupted = reg.NewCounterVec(prometheus.CounterOpts{
 		Name: "gateway_stream_interrupted_total",
-		Help: "SSE stream interrupted mid-flight (upstream side).",
-	})
+		Help: "SSE stream interrupted mid-flight.",
+	}, []string{"reason"}) // upstream_read_error | context_canceled
 
 	StreamClientGone = reg.NewCounter(prometheus.CounterOpts{
 		Name: "gateway_stream_client_gone_total",

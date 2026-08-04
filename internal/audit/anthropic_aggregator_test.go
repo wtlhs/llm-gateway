@@ -6,6 +6,22 @@ import (
 	"testing"
 )
 
+// TestAnthropicAggregator_ErrorEvent 验证 error 事件被解析到 completion 中。
+func TestAnthropicAggregator_ErrorEvent(t *testing.T) {
+	a := newAnthropicAggregator()
+	a.append([]byte(`event: error` + "\n" + `data: {"type":"error","error":{"type":"rate_limit_error","message":"rate limit"}}` + "\n\n"))
+
+	var out map[string]any
+	if err := json.Unmarshal(a.completion(), &out); err != nil {
+		t.Fatalf("completion not json: %v", err)
+	}
+	got, _ := out["error"].(string)
+	want := "rate limit (type: rate_limit_error)"
+	if got != want {
+		t.Errorf("error=%q, want %q", got, want)
+	}
+}
+
 // TestAnthropicAggregator_TextDelta 流式文本累积 + usage 映射。
 func TestAnthropicAggregator_TextDelta(t *testing.T) {
 	a := newAnthropicAggregator()

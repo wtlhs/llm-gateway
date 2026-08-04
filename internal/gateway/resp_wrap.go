@@ -22,12 +22,15 @@ func sseCaptureLoop(ctx context.Context, upstream io.ReadCloser, w http.Response
 
 	buf := make([]byte, 32*1024)
 	firstByte := true
+	var lastUpstreamChunk []byte // 上游最后一段原始数据, 中断时用于诊断
+	const lastChunkMax = 4096
 
 loop:
 	for {
 		select {
 		case <-ctx.Done():
-			metrics.StreamInterrupted.Inc()
+			metrics.StreamInterrupted.WithLabelValues("context_canceled").Inc()
+			rec.SetStreamError(http.StatusGatewayTimeout, "context canceled", lastUpstreamChunk)
 			break loop
 		default:
 		}
@@ -38,9 +41,12 @@ loop:
 				firstByte = false
 				metrics.UpstreamFirstByte.Observe(time.Since(upstreamT0).Seconds())
 			}
+			// 保留最后一段上游原始数据用于诊断(限制长度)
+			lastUpstreamChunk = appendLastChunk(lastUpstreamChunk, buf[:n], lastChunkMax)
 			// (a) 优先转发给客户端; 客户端断开则停止
 			if _, werr := w.Write(buf[:n]); werr != nil {
 				metrics.StreamClientGone.Inc()
+				rec.SetStreamError(499, "client gone: "+werr.Error(), lastUpstreamChunk)
 				break loop
 			}
 			if flusher != nil {
@@ -51,14 +57,29 @@ loop:
 		}
 		if rerr != nil {
 			if rerr != io.EOF {
-				metrics.StreamInterrupted.Inc()
+				metrics.StreamInterrupted.WithLabelValues("upstream_read_error").Inc()
+				rec.SetStreamError(http.StatusBadGateway, "upstream read error: "+rerr.Error(), lastUpstreamChunk)
 			}
 			break loop
 		}
 	}
 
 	rec.UpstreamLatencyMs = int32(time.Since(upstreamT0).Milliseconds())
-	rec.HTTPStatus = http.StatusOK
+	if rec.HTTPStatus == 0 {
+		rec.HTTPStatus = http.StatusOK
+	}
 	rec.Finalize()
 	push(rec)
+}
+
+// appendLastChunk 保留最近 up to max 字节的上游原始数据, 用于中断诊断。
+func appendLastChunk(prev, chunk []byte, max int) []byte {
+	if len(chunk) >= max {
+		return append([]byte(nil), chunk[len(chunk)-max:]...)
+	}
+	total := len(prev) + len(chunk)
+	if total > max {
+		prev = prev[total-max:]
+	}
+	return append(prev, chunk...)
 }

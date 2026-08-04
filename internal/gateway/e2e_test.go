@@ -846,3 +846,106 @@ func TestE2E_SystemSplit_NoSystem(t *testing.T) {
 		t.Error("no system prompt should be upserted")
 	}
 }
+
+// ============================================================
+// 测试: 流式请求 + 上游返回错误响应(非 SSE) → error_message 落库厂商具体报错
+// 覆盖 stream:true 但上游直接回 429/500 + JSON 错误体的场景。
+// 修复前: 该场景走 sseCaptureLoop, 厂商错误 JSON 被 aggregator 当 SSE 扫描,
+//   因无 "data:" 前缀被全部跳过, error_message 为 NULL, 仅 http_status 正确。
+// 修复后: proxy.go 流式分支对 >=400 走 SetError, error_message 含厂商报错。
+// ============================================================
+func TestE2E_Stream_UpstreamError_BodyCaptured(t *testing.T) {
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 上游返回错误: 不是 SSE 流, 而是 JSON 错误体(厂商限流/模型不存在等典型形态)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(429)
+		io.WriteString(w, `{"error":{"message":"rate limit exceeded","type":"requests","code":"429"}}`)
+	})
+
+	proxy, _, spy, _ := newTestGateway(t, upstream)
+
+	body := `{"model":"glm-5.2","stream":true,"messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-stream-err")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+
+	// 客户端应收到原样 429 + 错误体(透传)
+	if rec.Code != 429 {
+		t.Fatalf("status = %d, want 429", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "rate limit exceeded") {
+		t.Errorf("error body not forwarded to client: %s", rec.Body.String())
+	}
+
+	recs := waitForRecord(t, spy, 1)
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(recs))
+	}
+	got := recs[0]
+	if !got.IsStream {
+		t.Error("expected is_stream=true (由请求体决定, 与上游响应格式无关)")
+	}
+	if got.HTTPStatus != 429 {
+		t.Errorf("http_status = %d, want 429", got.HTTPStatus)
+	}
+	// 关键断言: 厂商具体报错进 error_message
+	if !strings.Contains(got.ErrorMessage, "rate limit exceeded") {
+		t.Errorf("error_message = %q, want contains 'rate limit exceeded'", got.ErrorMessage)
+	}
+}
+
+// ============================================================
+// 测试: 流式请求 + 流内 SSE error 事件 → error_message 落库
+// 覆盖上游正常开始 SSE 流但中途下发 error 事件的场景。
+// 修复前: aggregator 提取了 errorMessage 但 Finalize 没回填到 rec.ErrorMessage。
+// 修复后: Finalize 把流内 error 事件回填到 error_message。
+// ============================================================
+func TestE2E_Stream_SSEErrorEvent_Captured(t *testing.T) {
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		fl, _ := w.(http.Flusher)
+		// 先正常吐一段内容
+		io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+		if fl != nil {
+			fl.Flush()
+		}
+		// 再发 error 事件(厂商模型过载等)
+		io.WriteString(w, "data: {\"error\":{\"message\":\"model overloaded\",\"type\":\"server_error\"}}\n\n")
+		if fl != nil {
+			fl.Flush()
+		}
+		io.WriteString(w, "data: [DONE]\n\n")
+		if fl != nil {
+			fl.Flush()
+		}
+	})
+
+	proxy, _, spy, _ := newTestGateway(t, upstream)
+
+	body := `{"model":"glm-5.2","stream":true,"messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-sse-err")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	recs := waitForRecord(t, spy, 1)
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(recs))
+	}
+	got := recs[0]
+	if !got.IsStream {
+		t.Error("expected is_stream=true")
+	}
+	// 关键断言: 流内 error 事件回填到 error_message
+	if !strings.Contains(got.ErrorMessage, "model overloaded") {
+		t.Errorf("error_message = %q, want contains 'model overloaded'", got.ErrorMessage)
+	}
+}

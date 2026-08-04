@@ -20,6 +20,22 @@ func TestSSEAggregator_DoneSentinel(t *testing.T) {
 	}
 }
 
+// TestSSEAggregator_ErrorEvent 验证 SSE error 事件被解析到 completion 中。
+func TestSSEAggregator_ErrorEvent(t *testing.T) {
+	a := newSSEAggregator()
+	a.append([]byte(`data: {"error":{"message":"rate limit","type":"requests","code":"429"}}` + "\n\n"))
+
+	var out map[string]any
+	if err := json.Unmarshal(a.completion(), &out); err != nil {
+		t.Fatalf("completion not json: %v", err)
+	}
+	got, _ := out["error"].(string)
+	want := `rate limit (type: requests) (code: "429")`
+	if got != want {
+		t.Errorf("error=%q, want %q", got, want)
+	}
+}
+
 // TestSSEAggregator_StreamingDeltas 验证多 chunk delta 拼接 + usage + finish_reason。
 func TestSSEAggregator_StreamingDeltas(t *testing.T) {
 	a := newSSEAggregator()
