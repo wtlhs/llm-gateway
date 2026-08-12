@@ -132,9 +132,16 @@ func (rec *Record) SetPrompt(decoded, tail []byte, truncated bool) {
 
 // 顶层 model/stream 字段正则: 用于请求体被 postMax(MaxBodyBytes) 截断后的容错探测。
 // model/stream 位于 JSON 头部, 截断后仍完整, 而整体 json.Unmarshal 会因残缺 JSON 失败。
+//
+// 兼容转义形式(修复 safeJSON 包装后提取失败):
+//   残缺 JSON 被 safeJSON 包成 {"raw":"{\"model\":\"xxx\"}..."}, 其中 "model" 变成
+//   \"model\"(引号前带反斜杠)。modelFieldRe 用 \\"? 同时匹配有/无反斜杠两种形式,
+//   EscapedRe 专门匹配包装后的转义形式作为兜底。
 var (
-	modelFieldRe  = regexp.MustCompile(`"model"\s*:\s*"([^"]+)"`)
-	streamFieldRe = regexp.MustCompile(`"stream"\s*:\s*(true|false)`)
+	// \\?" 匹配引号前有 0 或 1 个反斜杠, 同时覆盖:
+	//   未转义 "model":"xxx"  和  safeJSON 包装后 \"model\":\"xxx\"
+	modelFieldRe  = regexp.MustCompile(`\\?"model\\?"\s*:\s*\\?"([^"\\]+)\\?"`)
+	streamFieldRe = regexp.MustCompile(`\\?"stream\\?"\s*:\s*\\?(true|false)`)
 )
 
 // extractPromptMeta 从请求体里尽力提取 model 字段(用于落库 + 限流旁路)。
@@ -142,6 +149,9 @@ var (
 // json.Unmarshal 整体失败 → stream 探测不到 → is_stream=false → 网关误走非流式路径,
 // 流式响应被缓冲, 客户端等不到数据超时断开, New API 侧表现为 client_gone。
 // 此处 Unmarshal 失败时回退到正则探测(字段在 JSON 头部, 截断不破坏)。
+//
+// 修复(safeJSON 包装后提取失败): 截断残缺 JSON 经 safeJSON 包装成 {"raw":"..."} 后,
+// 原始 "model":"xxx" 变成转义的 \"model\":\"xxx\"。正则已用 \\"? 兼容两种形式。
 func (rec *Record) extractPromptMeta(body []byte) {
 	var probe struct {
 		Model  string `json:"model"`

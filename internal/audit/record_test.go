@@ -87,6 +87,35 @@ func TestExtractPromptMeta_CompleteBody(t *testing.T) {
 	}
 }
 
+// TestExtractPromptMeta_SafeJSONWrapped 回归: 截断残缺 JSON 经 safeJSON 包装成
+// {"raw":"{\"model\":\"glm-5.2\",...}"} 后, 原始 "model" 变成转义的 \"model\"。
+// extractPromptMeta 的正则必须能从这种转义形式里提取 model, 否则 model 列落空。
+// 历史 bug: 78% 记录因这个路径 model 为空, 靠 0004 迁移脚本回填。
+func TestExtractPromptMeta_SafeJSONWrapped(t *testing.T) {
+	rec := &Record{}
+	// 模拟 safeJSON 包装后的 prompt_text(残缺 JSON 被包成 {"raw":"..."})
+	wrapped := []byte(`{"raw": "{\"model\":\"glm-5.2\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":true}"`)
+	rec.extractPromptMeta(wrapped)
+	if rec.Model != "glm-5.2" {
+		t.Errorf("model=%q, want glm-5.2 (escaped form in raw wrapper)", rec.Model)
+	}
+	if !rec.IsStream {
+		t.Error("is_stream should be true (stream field in escaped form)")
+	}
+}
+
+// TestExtractPromptMeta_SafeJSONWrapped_NonEscaped 同时验证:
+// 即使被 safeJSON 包装, 若原始 JSON 本身完整(Unmarshal 成功), 走正常路径。
+func TestExtractPromptMeta_SafeJSONWrapped_NonEscaped(t *testing.T) {
+	rec := &Record{}
+	// raw 字段值是合法 JSON 字符串, 整体 Unmarshal 后能拿到顶层字段(不会被正则干扰)
+	wrapped := []byte(`{"raw": "something", "model": "kimi-k3", "stream": false}`)
+	rec.extractPromptMeta(wrapped)
+	if rec.Model != "kimi-k3" {
+		t.Errorf("model=%q, want kimi-k3", rec.Model)
+	}
+}
+
 // TestSetPrompt_TailProbe 回归: 请求体被截断且 model/stream 位于尾部
 // (Claude Code /v1/messages 格式, context_management 前置), head+tail 拼接探测
 // 必须识别流式, 否则走非流式路径缓冲 SSE → 客户端超时 → New API client_gone。
