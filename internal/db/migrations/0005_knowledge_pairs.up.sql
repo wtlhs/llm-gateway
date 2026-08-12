@@ -24,7 +24,9 @@
 -- +goose StatementBegin
 CREATE TABLE IF NOT EXISTS knowledge_pairs (
     id            BIGSERIAL PRIMARY KEY,
-    conv_id       BIGINT       NOT NULL UNIQUE REFERENCES llm_conversation(id) ON DELETE CASCADE,
+    -- conv_id 溯源引用: 原始对话被 TTL 清理后置空, 知识问答对独立存续
+    -- (必须 ON DELETE SET NULL, 不能 CASCADE——否则 90 天 TTL 会清空整个知识库)
+    conv_id       BIGINT       UNIQUE REFERENCES llm_conversation(id) ON DELETE SET NULL,
 
     question      TEXT         NOT NULL,   -- 最后一条 user 消息(问题)
     answer        TEXT         NOT NULL,   -- completion 全文(回答)
