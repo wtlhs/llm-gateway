@@ -216,6 +216,30 @@ func TestExtract_TranscriptQuestion(t *testing.T) {
 	}
 }
 
+// TestExtract_UserInputTag 回归: Claude Code 把用户问题包在 <user_input> 标签,
+// 提取内部内容为问题, 并过滤纯闲聊(你好/hello)。
+func TestExtract_UserInputTag(t *testing.T) {
+	// 业务问题: 提取 <user_input> 内部内容
+	prompt := `{"messages":[{"role":"user","content":[{"type":"text","text":"<user_input>\n管理端默认勾选此客户今日不再提示, 勾选并确认后状态重置\n</user_input>"}]}]}`
+	completion := `{"choices":[{"message":{"content":"已分析该需求: 默认勾选与状态重置的机制需要前后端配合, 建议在配置表增加今日不再提示标记字段, 并在确认弹窗后重置该标记, 同时补充对应的接口与页面交互逻辑说明文档。"}}]}`
+	p := Extract(prompt, completion, "m", "", "messages")
+	if p == nil {
+		t.Fatal("expected pair from user_input tag")
+	}
+	if strings.Contains(p.Question, "<user_input>") {
+		t.Errorf("question should not contain tag: %q", p.Question)
+	}
+	if !strings.Contains(p.Question, "管理端默认勾选") {
+		t.Errorf("question should extract tag content: %q", p.Question)
+	}
+
+	// 纯闲聊: 应被 chitChatRe 过滤
+	prompt2 := `{"messages":[{"role":"user","content":[{"type":"text","text":"<user_input>\n你好\n</user_input>"}]}]}`
+	if p2 := Extract(prompt2, completion, "m", "", "messages"); p2 != nil {
+		t.Fatalf("expected nil for chit-chat, got %+v", p2)
+	}
+}
+
 // ============ 解析细节 ============
 
 func TestExtract_AnthropicCompletionFallback(t *testing.T) {

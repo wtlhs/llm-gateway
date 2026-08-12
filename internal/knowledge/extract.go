@@ -30,7 +30,10 @@ const (
 
 // noiseQuestionRe 匹配明显无知识价值的问题(会话标题生成/系统提示/system-reminder 注入等)。
 // 注意: 中文后无单词边界, 不能用 \b 收尾; 用宽松前缀匹配。
-var noiseQuestionRe = regexp.MustCompile(`(?i)^\s*(<session>|<transcript>|generate a (title|name)|为这次对话|你是什么模型|<system-reminder>|As you answer the user)`)
+var noiseQuestionRe = regexp.MustCompile(`(?i)^\s*(<session>|<transcript>|generate a (title|name)|为这次对话|你是什么模型|<system-reminder>|As you answer the user|<user_input>)`)
+
+// chitChatRe 匹配纯闲聊(无业务知识)的问题。
+var chitChatRe = regexp.MustCompile(`(?i)^\s*(你好|哈罗|hello|hi|谢谢|thank|再见|拜拜|你是谁|你会什么|测试|test)\s*$`)
 
 // codeBlockRe 匹配 markdown 代码块 ```lang ... ```。
 var codeBlockRe = regexp.MustCompile("```[^`\n]*\n[\\s\\S]*?```|`[^`\n]+`")
@@ -55,6 +58,9 @@ func Extract(promptRaw, completionRaw, model, callerName, endpoint string) *Pair
 		return nil
 	}
 	if noiseQuestionRe.MatchString(question) {
+		return nil
+	}
+	if chitChatRe.MatchString(question) {
 		return nil
 	}
 	answer := extractAnswer(completionRaw)
@@ -116,12 +122,32 @@ func extractQuestion(promptRaw string) string {
 			if q := extractFromTranscript(s); q != "" {
 				return q
 			}
+			// <user_input> 标签: Claude Code 把用户输入包在标签里, 提取内部内容
+			if q := extractFromUserInput(s); q != "" {
+				return q
+			}
 			if s != "" {
 				return s
 			}
 		}
 	}
 	return ""
+}
+
+// extractFromUserInput 从 <user_input>...</user_input> 标签中提取用户输入内容。
+// Claude Code 把用户问题包在 <user_input> 标签中, 标签本身不是问题。
+func extractFromUserInput(s string) string {
+	const open = "<user_input>"
+	const close = "</user_input>"
+	start := strings.Index(s, open)
+	if start < 0 {
+		return ""
+	}
+	body := s[start+len(open):]
+	if end := strings.Index(body, close); end >= 0 {
+		body = body[:end]
+	}
+	return strings.TrimSpace(body)
 }
 
 // extractFromTranscript 从 <transcript> 文本中提取最后一条 "User:" 之后的内容。
