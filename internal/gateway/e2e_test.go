@@ -73,6 +73,7 @@ func testConfig() *config.Config {
 		AuditMode:           config.ModeRedact,
 		CaptureEndpointsCSV: "chat/completions,completions,responses,embeddings,moderations,messages",
 		MaxBodyBytes:        65536,
+		CompletionMaxBytes:  10485760,
 		PreBodyMaxBytes:     33554432,
 		TTLDays:             90,
 		BreakerFailures:     5,
@@ -110,7 +111,7 @@ func newTestGateway(t *testing.T, upstream http.Handler) (*Proxy, *httptest.Serv
 		Pipeline: pipeline,
 		Cfg:      cfg,
 	})
-	proxy := NewProxy(transport, cfg.NewAPIBaseURL, cfg.MaxBodyBytes)
+	proxy := NewProxy(transport, cfg.NewAPIBaseURL, cfg.CompletionMaxBytes)
 	return proxy, upSrv, spy, pipeline
 }
 

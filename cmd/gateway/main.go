@@ -97,7 +97,7 @@ func main() {
 		Pipeline: pipeline,
 		Cfg:      cfg,
 	})
-	proxy := gateway.NewProxy(transport, cfg.NewAPIBaseURL, cfg.MaxBodyBytes)
+	proxy := gateway.NewProxy(transport, cfg.NewAPIBaseURL, cfg.CompletionMaxBytes)
 
 	// 8. 管理端点
 	mux := gateway.NewMux(
