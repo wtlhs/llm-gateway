@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -112,6 +113,106 @@ func TestExtract_FilterNoiseQuestion(t *testing.T) {
 	completion := `{"choices":[{"message":{"content":"这是一个足够长的回答内容用于通过长度过滤测试，大概五十个字符以上吧，这里继续补充更多内容确保长度足够。"}}]}`
 	if p := Extract(prompt, completion, "m", "", "messages"); p != nil {
 		t.Fatalf("expected nil for session-title question, got %+v", p)
+	}
+}
+
+// TestExtract_DoubleRawWrappedPrompt 回归: safeJSON 兜底可能产生双层 raw 包装,
+// 循环解包后仍能提取问题(此前只解一层导致 19k 条实质回答无法提取)。
+func TestExtract_DoubleRawWrappedPrompt(t *testing.T) {
+	inner := `{"model":"glm-5.2","messages":[{"role":"user","content":[{"type":"text","text":"帮我修复登录页面的校验逻辑"}]}]}`
+	innerJSON, _ := json.Marshal(inner)
+	mid := `{"raw":` + string(innerJSON) + `}`
+	outerJSON, _ := json.Marshal(mid)
+	outer := `{"raw":` + string(outerJSON) + `}`
+
+	completion := `{"choices":[{"message":{"content":"已修复登录校验问题: 增加了手机号格式验证、验证码时效检查与账号锁定保护, 补充了对应的单元测试用例覆盖全部边界场景, 包括空输入、非法格式与超时验证码的处理路径。"}}]}`
+	p := Extract(outer, completion, "glm-5.2", "", "messages")
+	if p == nil {
+		t.Fatal("expected pair from double-wrapped prompt")
+	}
+	if !strings.Contains(p.Question, "登录页面") {
+		t.Errorf("question = %q, want 登录页面", p.Question)
+	}
+}
+
+// TestExtract_SystemReminderStripped 回归: Anthropic 注入的 <system-reminder>
+// 不是用户问题, 剥离后应提取真实问题文本。
+func TestExtract_SystemReminderStripped(t *testing.T) {
+	prompt := `{"messages":[{"role":"user","content":[{"type":"text","text":"<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# currentDate\nToday's date is 2026-08-07.\n</system-reminder>\n\n打开项目目录并查看README"}]}]}`
+	completion := `{"choices":[{"message":{"content":"已打开项目目录, README 内容为项目介绍与本地开发环境配置说明, 包含前后端启动命令、依赖安装步骤与常见问题排查指引, 具体端口分配与配置文件路径也已整理完毕。"}}]}`
+	p := Extract(prompt, completion, "m", "", "messages")
+	if p == nil {
+		t.Fatal("expected pair")
+	}
+	if strings.Contains(p.Question, "system-reminder") {
+		t.Errorf("question should not contain system-reminder: %q", p.Question)
+	}
+	if !strings.Contains(p.Question, "README") {
+		t.Errorf("question should contain real user text README: %q", p.Question)
+	}
+}
+
+// TestExtract_StreamingRawCompletion 回归: 流式对话的 completion 是
+// {"raw":"data: {...}\ndata: {...}"} 包装的 SSE, 必须聚合 delta.content
+// (此前 12.9k 条 49% 实质回答因只解析 choices 结构被过滤)。
+func TestExtract_StreamingRawCompletion(t *testing.T) {
+	prompt := `{"messages":[{"role":"user","content":"帮我优化数据库查询性能"}]}`
+	sse := "data: {\"choices\":[{\"delta\":{\"content\":\"已优化查询性能: \"}}]}\n" +
+		"data: {\"choices\":[{\"delta\":{\"content\":\"添加了联合索引覆盖高频查询条件\"}}]}\n" +
+		"data: {\"choices\":[{\"delta\":{\"content\":\"并重写了慢查询逻辑\"}}]}\n" +
+		"data: {\"choices\":[{\"delta\":{\"content\":\"整体响应时间下降约百分之四十\"}}]}\n" +
+		"data: {\"choices\":[{\"delta\":{\"content\":\"后续建议定期分析慢日志持续优化\"}}]}\n" +
+		"data: [DONE]\n"
+	rawJSON, _ := json.Marshal(sse)
+	completion := `{"raw":` + string(rawJSON) + `}`
+	p := Extract(prompt, completion, "m", "", "messages")
+	if p == nil {
+		t.Fatal("expected pair from streaming completion")
+	}
+	if !strings.Contains(p.Answer, "联合索引") || !strings.Contains(p.Answer, "慢查询") {
+		t.Errorf("answer should aggregate SSE deltas: %q", p.Answer)
+	}
+}
+
+// TestExtract_StreamingRawCompletion_WithThinking 流式含 reasoning_content
+// 字段时(如 MiniMax), 只聚合 content, 不混入思考过程。
+func TestExtract_StreamingRawCompletion_WithThinking(t *testing.T) {
+	prompt := `{"messages":[{"role":"user","content":"解释一下什么是索引"}]}`
+	sse := "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"让我想想\",\"content\":\"索引是加速查询的数据结构\"}}]}\n" +
+		"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"继续想\",\"content\":\"，类似书的目录\"}}]}\n" +
+		"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"还在想\",\"content\":\"，能大幅减少扫描行数提升性能\"}}]}\n" +
+		"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"接着想\",\"content\":\"，在数据量大的表上效果尤其明显\"}}]}\n" +
+		"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"想完了\",\"content\":\"，建议为常用查询列建立合适的索引\"}}]}\n" +
+		"data: [DONE]\n"
+	rawJSON, _ := json.Marshal(sse)
+	completion := `{"raw":` + string(rawJSON) + `}`
+	p := Extract(prompt, completion, "m", "", "messages")
+	if p == nil {
+		t.Fatal("expected pair")
+	}
+	if strings.Contains(p.Answer, "让我想想") || strings.Contains(p.Answer, "继续想") {
+		t.Errorf("answer should not include reasoning_content: %q", p.Answer)
+	}
+	if !strings.Contains(p.Answer, "索引") {
+		t.Errorf("answer should include content: %q", p.Answer)
+	}
+}
+
+// TestExtract_TranscriptQuestion 回归: Claude Code 把对话历史塞进 <transcript>,
+// 真实问题在 "User:" 标记之后, 必须提取最后一条 User 内容(此前 8.8k 条
+// transcript 对话因问题提取失败被跳过)。
+func TestExtract_TranscriptQuestion(t *testing.T) {
+	prompt := `{"messages":[{"role":"user","content":[{"type":"text","text":"<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# currentDate\nToday's date is 2026-08-07.\n</system-reminder>\n\n<transcript>\nUser: 帮我检查登录页面的校验逻辑\nAssistant: 好的，我来看看\nUser: 还要检查注册页面的表单验证\nAssistant: 正在检查\nUser: 最后帮我检查忘记密码流程\n</transcript>"}]}]}`
+	completion := `{"choices":[{"message":{"content":"已检查完登录、注册和忘记密码三个流程, 发现登录校验缺少防重复提交, 注册表单缺少密码强度验证, 忘记密码缺少验证码时效检查, 已给出修复方案和对应的单元测试建议。"}}]}`
+	p := Extract(prompt, completion, "m", "", "messages")
+	if p == nil {
+		t.Fatal("expected pair from transcript")
+	}
+	if !strings.Contains(p.Question, "忘记密码") {
+		t.Errorf("question should be last User: content, got %q", p.Question)
+	}
+	if strings.Contains(p.Question, "system-reminder") {
+		t.Errorf("question should not contain system-reminder: %q", p.Question)
 	}
 }
 

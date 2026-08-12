@@ -81,10 +81,11 @@ func Extract(promptRaw, completionRaw, model, callerName, endpoint string) *Pair
 }
 
 // extractQuestion 从 prompt_text 提取"最后一条 user 消息"作为问题。
-// prompt_text 有两种存储形式:
+// prompt_text 有三种存储形式:
 //   1. 直接 JSON: {"model":..., "messages":[...]} (Anthropic/OpenAI 统一 messages 数组)
-//   2. raw 包装: {"raw": "<JSON字符串>"} (safeJSON 兜底)
-// 兼容两种: 先尝试直接解析, 失败则解包 raw 再解析。
+//   2. raw 包装: {"raw": "<JSON字符串>"} (safeJSON 兜底; 可能多层嵌套!)
+//   3. 双层 raw: {"raw":"{\"raw\":\"{\\\"...\\\"}\"}"} (safeJSON 兜底后的再次包装)
+// 兼容: 循环解包 raw 直到拿到可解析的 messages, 再取最后 user 消息。
 func extractQuestion(promptRaw string) string {
 	body, ok := unwrapPrompt(promptRaw)
 	if !ok {
@@ -108,30 +109,111 @@ func extractQuestion(promptRaw string) string {
 		}
 		// content 可能是 string(OpenAI) 或 数组(Anthropic: [{type,text}])
 		if s := contentToText(m.Content); s != "" {
-			return s
+			// 剥离 system-reminder 注入(Anthropic 附加的系统提示, 不是用户问题)
+			s = stripSystemReminder(s)
+			// transcript 场景: Claude Code 把整段对话历史塞进 <transcript>,
+			// 真实问题在 "User: ..." 标记之后, 提取最后一条 User 内容
+			if q := extractFromTranscript(s); q != "" {
+				return q
+			}
+			if s != "" {
+				return s
+			}
 		}
 	}
 	return ""
 }
 
-// unwrapPrompt 返回可解析的请求体 JSON; 兼容 raw 包装。
+// extractFromTranscript 从 <transcript> 文本中提取最后一条 "User:" 之后的内容。
+// Claude Code 的 transcript 格式:
+//   <transcript>
+//   User: 第一个问题
+//   ...agent 回复...
+//   User: 最终问题
+//   </transcript>
+// 返回最后一条 User: 之后的文本(真实问题), 无则返回空。
+func extractFromTranscript(s string) string {
+	// 定位 <transcript> 块
+	start := strings.Index(s, "<transcript>")
+	if start < 0 {
+		return ""
+	}
+	body := s[start+len("<transcript>"):]
+	if end := strings.Index(body, "</transcript>"); end >= 0 {
+		body = body[:end]
+	}
+	// 找所有 "User:" 出现位置, 取最后一个
+	marker := "User:"
+	lastIdx := -1
+	for {
+		idx := strings.Index(body[lastIdx+1:], marker)
+		if idx < 0 {
+			break
+		}
+		lastIdx += 1 + idx
+	}
+	if lastIdx < 0 {
+		return ""
+	}
+	// 取最后一条 User: 之后到下一个换行/结束的文本
+	q := strings.TrimSpace(body[lastIdx+len(marker):])
+	// 只取到第一个换行(单条问题), 避免混入 agent 回复
+	if nl := strings.IndexAny(q, "\r\n"); nl >= 0 {
+		q = strings.TrimSpace(q[:nl])
+	}
+	// 去掉 [Request interrupted by user] 等系统标记
+	q = strings.TrimPrefix(q, "[Request interrupted by user]")
+	return strings.TrimSpace(q)
+}
+
+// unwrapPrompt 返回可解析的请求体 JSON; 兼容 raw 多层包装。
+// 修复(2026-08-12): 原实现只解一层 raw, 而 safeJSON 兜底后可能产生
+// 双层包装({"raw":"{\"raw\":\"...\"}"}), 导致 messages 解析失败、
+// 大量实质回答无法提取。现在循环解包(最多 5 层)直到无 raw 字段。
 func unwrapPrompt(promptRaw string) (string, bool) {
-	raw := []byte(promptRaw)
-	// 先尝试直接解析(顶层含 messages)
-	var probe struct {
-		Messages json.RawMessage `json:"messages"`
+	cur := promptRaw
+	for i := 0; i < 5; i++ {
+		// 先尝试直接解析(顶层含 messages)
+		var probe struct {
+			Messages json.RawMessage `json:"messages"`
+		}
+		if err := json.Unmarshal([]byte(cur), &probe); err == nil && len(probe.Messages) > 0 {
+			return cur, true
+		}
+		// raw 包装: {"raw": "..."}
+		var wrap struct {
+			Raw string `json:"raw"`
+		}
+		if err := json.Unmarshal([]byte(cur), &wrap); err == nil && wrap.Raw != "" {
+			cur = wrap.Raw
+			continue
+		}
+		// 无 raw 也无 messages: 放弃
+		return cur, false
 	}
-	if err := json.Unmarshal(raw, &probe); err == nil && len(probe.Messages) > 0 {
-		return promptRaw, true
+	return cur, false
+}
+
+// stripSystemReminder 剥离 Anthropic 注入的 <system-reminder>...</system-reminder> 块。
+// 这类内容不是用户问题, 提取后置空让调用方回退到更早的 user 消息。
+func stripSystemReminder(s string) string {
+	const open = "<system-reminder>"
+	const close = "</system-reminder>"
+	for {
+		start := strings.Index(s, open)
+		if start < 0 {
+			break
+		}
+		end := strings.Index(s[start:], close)
+		if end < 0 {
+			s = s[:start] // 未闭合, 丢弃到开头
+			break
+		}
+		end = start + end + len(close)
+		// 删除该块(含其后的换行)
+		s = s[:start] + strings.TrimLeft(s[end:], "\r\n")
 	}
-	// raw 包装: {"raw": "..."}
-	var wrap struct {
-		Raw string `json:"raw"`
-	}
-	if err := json.Unmarshal(raw, &wrap); err == nil && wrap.Raw != "" {
-		return wrap.Raw, true
-	}
-	return promptRaw, false
+	return strings.TrimSpace(s)
 }
 
 // contentToText 将 message.content 转为纯文本。
@@ -174,13 +256,26 @@ func contentToText(c json.RawMessage) string {
 }
 
 // extractAnswer 从 completion_text 提取回答全文。
-// 网关统一归一化为 OpenAI 格式: {"choices":[{"message":{"content":"..."}}]}
-// (messages 端点也是该结构, 见 0001_init 设计; 部分老数据可能直接是
-//  Anthropic 格式 {"content":[{"type":"text","text":"..."}]}, 兜底解析)。
+// completion_text 有三种存储形式:
+//   1. OpenAI 归一化: {"choices":[{"message":{"content":"..."}}]} (非流式)
+//   2. raw 包装 SSE 流: {"raw":"data: {...}\ndata: {...}"} (流式被 safeJSON 包装)
+//   3. Anthropic 原生: {"content":[{"type":"text","text":"..."}]} (兜底)
+// 修复(2026-08-12): 流式对话的 completion 是 {"raw":"data: ..."} 包装的 SSE,
+// 原实现只解析 choices 结构导致 12.9k 条(49%)实质回答被过滤。现在支持:
+//   - 解 raw 包装后按行解析 SSE(data: {...}), 聚合 delta.content
+//   - 兼容 choices/message/delta 两种 SSE 载荷
 func extractAnswer(completionRaw string) string {
 	raw := []byte(completionRaw)
 	if len(raw) == 0 {
 		return ""
+	}
+	// 先解 raw 包装(流式 SSE 或任何 safeJSON 兜底)
+	if body, ok := unwrapRaw(completionRaw); ok && body != completionRaw {
+		if s := extractSSEAnswer(body); s != "" {
+			return s
+		}
+		// raw 内可能是完整 JSON(非 SSE), 继续按 choices 解析
+		raw = []byte(body)
 	}
 	// OpenAI 格式(主流)
 	var openai struct {
@@ -225,6 +320,51 @@ func extractAnswer(completionRaw string) string {
 		return sb.String()
 	}
 	return ""
+}
+
+// unwrapRaw 解一层 {"raw":"..."} 包装(不递归, 由调用方按需循环)。
+func unwrapRaw(s string) (string, bool) {
+	var wrap struct {
+		Raw string `json:"raw"`
+	}
+	if err := json.Unmarshal([]byte(s), &wrap); err == nil && wrap.Raw != "" {
+		return wrap.Raw, true
+	}
+	return s, false
+}
+
+// extractSSEAnswer 从 SSE 文本(data: {...} 多行)聚合回答内容。
+// 兼容 OpenAI 流式两种载荷:
+//   data: {"choices":[{"delta":{"content":"..."}}]}
+//   data: {"choices":[{"delta":{"message":{"content":"..."}}}]}  (部分实现)
+func extractSSEAnswer(sse string) string {
+	var sb strings.Builder
+	for _, line := range strings.Split(sse, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+		var evt struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(payload), &evt); err != nil {
+			continue
+		}
+		for _, ch := range evt.Choices {
+			if ch.Delta.Content != "" {
+				sb.WriteString(ch.Delta.Content)
+			}
+		}
+	}
+	return sb.String()
 }
 
 // countCodeBlocks 统计回答中 markdown 代码块数量。
