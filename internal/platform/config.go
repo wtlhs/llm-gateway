@@ -22,6 +22,13 @@ type Config struct {
 	DBMaxOpenConns int `envconfig:"PLATFORM_DB_MAX_OPEN_CONNS" default:"5"`
 
 	// 鉴权(生产必须设置, 留空启动会 WARN)
+	// 管理员账号(登录用户名, 默认 admin)
+	AdminUser string `envconfig:"PLATFORM_ADMIN_USER" default:"admin"`
+	// 管理员密码(明文配置; 启动时 bcrypt 哈希后存内存比对)
+	AdminPassword string `envconfig:"PLATFORM_ADMIN_PASSWORD" default:""`
+	// 会话有效期(登录后 cookie 的存活时长)
+	SessionTTL time.Duration `envconfig:"PLATFORM_SESSION_TTL" default:"24h"`
+	// 旧 Bearer token(兼容存量; 未配置密码登录时作为兜底鉴权)
 	AuthToken string `envconfig:"PLATFORM_AUTH_TOKEN" default:""`
 
 	// IP 白名单(逗号分隔 CIDR/IP, 留空=不限; 生产建议设内网段)

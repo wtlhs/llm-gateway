@@ -14,13 +14,25 @@ import (
 
 // Server 平台 HTTP 服务。
 type Server struct {
-	cfg   *Config
-	store *db.Store
+	cfg    *Config
+	store  *db.Store
+	auth   *passwordAuth
+	sess   *sessionStore
 }
 
 // New 构造平台服务。
+// 若配置了管理员密码, 初始化密码校验 + 会话存储; 否则 auth 为 nil(登录不可用)。
 func New(cfg *Config, store *db.Store) *Server {
-	return &Server{cfg: cfg, store: store}
+	s := &Server{cfg: cfg, store: store}
+	if cfg.AdminPassword != "" {
+		if a, err := newPasswordAuth(cfg.AdminUser, cfg.AdminPassword); err == nil {
+			s.auth = a
+			s.sess = newSessionStore(cfg.SessionTTL)
+		} else {
+			slog.Warn("password auth init failed", "err", err)
+		}
+	}
+	return s
 }
 
 // Handler 装配全部路由(Go 1.22+ ServeMux 增强路由, 支持路径参数 {id})。
@@ -39,6 +51,13 @@ func (s *Server) Handler() http.Handler {
 	}
 
 	h := handler.New(s.store, s.cfg.Timezone, s.cfg.QueryTimeout)
+
+	// 认证(免 token, 但受 IP白名单+限流保护): 登录/登出
+	mux.Handle("POST /api/v1/auth/login", s.securityHeadersMiddleware(
+		s.corsMiddleware(s.ipAllowListMiddleware(s.rateLimitMiddleware(http.HandlerFunc(s.loginHandler))))))
+	mux.Handle("POST /api/v1/auth/logout", wrap(s.logoutHandler))
+	// 当前登录态(供前端判断是否需要跳登录页)
+	mux.Handle("GET /api/v1/auth/me", wrap(s.meHandler))
 
 	// 总览看板
 	mux.Handle("GET /api/v1/dashboard/overview", wrap(h.DashboardOverview))
@@ -127,6 +146,45 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+// loginHandler 登录: 校验用户名+密码, 签发 httpOnly session cookie。
+func (s *Server) loginHandler(w http.ResponseWriter, r *http.Request) {
+	if s.auth == nil {
+		writeError(w, http.StatusServiceUnavailable, "登录未配置(缺少 PLATFORM_ADMIN_PASSWORD)")
+		return
+	}
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if !s.auth.verify(req.Username, req.Password) {
+		// 统一 401, 不泄露"用户名或密码哪个错"
+		writeError(w, http.StatusUnauthorized, "用户名或密码错误")
+		return
+	}
+	sid := s.sess.create()
+	setSessionCookie(w, sid, s.cfg.SessionTTL)
+	writeJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"user": s.cfg.AdminUser}})
+}
+
+// logoutHandler 登出: 吊销会话 + 清 cookie。
+func (s *Server) logoutHandler(w http.ResponseWriter, r *http.Request) {
+	if sid := sessionFromRequest(r); sid != "" && s.sess != nil {
+		s.sess.revoke(sid)
+	}
+	clearSessionCookie(w)
+	writeJSON(w, http.StatusOK, map[string]any{"code": 0})
+}
+
+// meHandler 返回当前登录态(供前端判断)。
+func (s *Server) meHandler(w http.ResponseWriter, r *http.Request) {
+	// 走到这里说明已通过 authMiddleware(会话有效)
+	writeJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"user": s.cfg.AdminUser}})
 }
 
 // --- 辅助 ---

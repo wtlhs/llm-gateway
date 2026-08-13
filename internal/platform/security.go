@@ -101,29 +101,25 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// authMiddleware 增强: token 为空时拒绝生产访问(仅开发模式放行 localhost)。
+// authMiddleware 会话鉴权: 校验 httpOnly cookie 会话。
+// 优先级: session cookie > (兼容)旧 Bearer token。
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// token 未配置: 仅允许 localhost 访问(开发场景)
-		if s.cfg.AuthToken == "" {
-			ip := extractClientIP(r)
-			if isLocalhost(ip) {
+		// 1. 会话 cookie(登录后)
+		if sid := sessionFromRequest(r); sid != "" {
+			if s.sess != nil && s.sess.valid(sid) {
 				next.ServeHTTP(w, r)
 				return
 			}
-			writeError(w, http.StatusUnauthorized, "auth token not configured")
-			return
 		}
-		// 优先 Bearer 头, 回退查询参数(?token=, 仅 export 场景)
-		cred := extractBearer(r)
-		if cred == "" {
-			cred = r.URL.Query().Get("token")
+		// 2. 兼容: 未配置密码登录时, 退回旧 Bearer token(存量场景)
+		if s.auth == nil && s.cfg.AuthToken != "" {
+			if extractBearer(r) == s.cfg.AuthToken {
+				next.ServeHTTP(w, r)
+				return
+			}
 		}
-		if cred != s.cfg.AuthToken {
-			writeError(w, http.StatusUnauthorized, "unauthorized")
-			return
-		}
-		next.ServeHTTP(w, r)
+		writeError(w, http.StatusUnauthorized, "unauthorized")
 	})
 }
 

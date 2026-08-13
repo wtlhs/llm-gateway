@@ -1,14 +1,7 @@
 // API 客户端: 封装所有后端请求。
-
-const TOKEN_KEY = 'platform_token'
-
-export function getToken(): string {
-  return localStorage.getItem(TOKEN_KEY) || ''
-}
-
-export function setToken(token: string) {
-  localStorage.setItem(TOKEN_KEY, token)
-}
+// 鉴权: 后端下发 httpOnly cookie, 前端无需手动管理 token;
+// 只需带 credentials: 'same-origin' 让浏览器自动携带 cookie。
+// 401 时跳转登录页。
 
 async function request<T>(path: string, params?: Record<string, any>): Promise<T> {
   const url = new URL(path, window.location.origin)
@@ -19,18 +12,50 @@ async function request<T>(path: string, params?: Record<string, any>): Promise<T
       }
     })
   }
-  const headers: Record<string, string> = {}
-  const token = getToken()
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`
+  const resp = await fetch(url.toString(), { credentials: 'same-origin' })
+  if (resp.status === 401) {
+    // 会话失效/未登录 → 跳登录页
+    if (window.location.pathname !== '/login') {
+      window.location.href = '/login'
+    }
+    throw new Error('401: 未登录或会话已过期')
   }
-  const resp = await fetch(url.toString(), { headers })
   if (!resp.ok) {
     const text = await resp.text()
     throw new Error(`${resp.status}: ${text}`)
   }
   const json = await resp.json()
   return json
+}
+
+// --- 认证 ---
+
+export async function login(username: string, password: string): Promise<void> {
+  const resp = await fetch('/api/v1/auth/login', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  })
+  if (!resp.ok) {
+    const j = await resp.json().catch(() => ({}))
+    throw new Error(j.error || `${resp.status}: 登录失败`)
+  }
+}
+
+export async function logout(): Promise<void> {
+  await fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => {})
+  window.location.href = '/login'
+}
+
+// 检查当前登录态(供路由守卫判断)
+export async function checkAuth(): Promise<boolean> {
+  try {
+    const resp = await fetch('/api/v1/auth/me', { credentials: 'same-origin' })
+    return resp.ok
+  } catch {
+    return false
+  }
 }
 
 // --- 通用类型 ---
@@ -137,8 +162,6 @@ export const api = {
   exportUrl: (params: { model?: string; caller?: string }) => {
     const url = new URL('/api/v1/conversations/export', window.location.origin)
     Object.entries(params).forEach(([k, v]) => { if (v) url.searchParams.set(k, v) })
-    const token = getToken()
-    if (token) url.searchParams.set('token', token) // export via GET with token query (simplified)
     return url.toString()
   },
 
