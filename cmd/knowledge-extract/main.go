@@ -78,6 +78,7 @@ func main() {
 				continue
 			}
 			p.ConvID = r.ID
+			p.ConvCreatedAt = r.CreatedAt
 			pairs = append(pairs, *p)
 			if *verbose {
 				slog.Info("extracted", "conv", r.ID, "q", truncStr(p.Question, 60), "code", p.CodeBlocks)

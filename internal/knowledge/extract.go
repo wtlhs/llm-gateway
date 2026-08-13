@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -20,6 +21,9 @@ type Pair struct {
 	Model      string
 	CallerName string
 	Endpoint   string
+	// ConvCreatedAt 原始对话时间(从 llm_conversation.created_at 带入,
+	// 保证知识库时间属性与原始对话一致, 重跑不刷新)
+	ConvCreatedAt time.Time
 }
 
 // 跳过规则: 回答过短/纯工具调用/错误占位等无知识价值的记录。

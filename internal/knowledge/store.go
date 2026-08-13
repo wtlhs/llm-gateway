@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -27,6 +28,7 @@ type SourceRow struct {
 	Model            string
 	CallerName       *string
 	Endpoint         string
+	CreatedAt        time.Time
 }
 
 // StreamSources 分批流式读取有效对话(错误请求/空 completion 跳过)。
@@ -40,7 +42,7 @@ func (s *Store) StreamSources(ctx context.Context, batchSize int, fn func([]Sour
 	for {
 		const q = `
 			SELECT id, prompt_text::text, coalesce(completion_text::text, ''),
-			       model, caller_name, endpoint
+			       model, caller_name, endpoint, created_at
 			FROM llm_conversation
 			WHERE id > $1
 			  AND error_message IS NULL
@@ -56,7 +58,7 @@ func (s *Store) StreamSources(ctx context.Context, batchSize int, fn func([]Sour
 		batch := make([]SourceRow, 0, batchSize)
 		for rows.Next() {
 			var r SourceRow
-			if err := rows.Scan(&r.ID, &r.PromptText, &r.CompletionText, &r.Model, &r.CallerName, &r.Endpoint); err != nil {
+			if err := rows.Scan(&r.ID, &r.PromptText, &r.CompletionText, &r.Model, &r.CallerName, &r.Endpoint, &r.CreatedAt); err != nil {
 				rows.Close()
 				return fmt.Errorf("scan row: %w", err)
 			}
@@ -105,7 +107,7 @@ func (s *Store) upsertBatch(ctx context.Context, pairs []Pair) (int, error) {
 	const q = `
 		INSERT INTO knowledge_pairs
 			(conv_id, question, answer, code_blocks, file_paths, keywords, model, caller_name, endpoint, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, $10)
 		ON CONFLICT (conv_id) DO UPDATE SET
 			question = EXCLUDED.question,
 			answer   = EXCLUDED.answer,
@@ -114,14 +116,15 @@ func (s *Store) upsertBatch(ctx context.Context, pairs []Pair) (int, error) {
 			keywords    = EXCLUDED.keywords,
 			model       = EXCLUDED.model,
 			caller_name = EXCLUDED.caller_name,
-			endpoint    = EXCLUDED.endpoint,
-			created_at  = now()`
+			endpoint    = EXCLUDED.endpoint
+		-- created_at 不在冲突时刷新: 保留首次提取时的原始对话时间
+		`
 
 	batch := &pgx.Batch{}
 	for _, p := range pairs {
 		batch.Queue(q,
 			p.ConvID, p.Question, p.Answer, p.CodeBlocks,
-			p.FilePaths, p.Keywords, p.Model, nullableStr(p.CallerName), p.Endpoint,
+			p.FilePaths, p.Keywords, p.Model, nullableStr(p.CallerName), p.Endpoint, p.ConvCreatedAt,
 		)
 	}
 	br := s.pool.SendBatch(ctx, batch)
