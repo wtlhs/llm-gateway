@@ -127,6 +127,17 @@ export interface KnowledgeStats {
   top_agent: string; top_agent_uses: number; avg_config_size: number
 }
 
+export interface KnowledgePair {
+  id: number; question: string; answer: string
+  code_blocks: number; file_paths: string[]; keywords: string[]
+  model: string; caller_name: string; created_at: string
+}
+
+export interface KnowledgePairStats {
+  total: number; with_code: number; with_files: number
+  avg_answer_len: number; oldest: string; newest: string
+}
+
 // --- Ops ---
 
 export interface DBStats {
@@ -170,6 +181,9 @@ export const api = {
     request<ListResp<SystemPromptSummary>>('/api/v1/knowledge/configs', params),
   config: (hash: string) => request<ApiResp<any>>(`/api/v1/knowledge/configs/${hash}`),
   knowledgeStats: () => request<ApiResp<KnowledgeStats>>('/api/v1/knowledge/stats'),
+  searchKnowledge: (params: { q?: string; page?: number; size?: number }) =>
+    request<ListResp<KnowledgePair>>('/api/v1/knowledge/search', params),
+  knowledgePairStats: () => request<ApiResp<KnowledgePairStats>>('/api/v1/knowledge/pair-stats'),
 
   // Ops
   dbStats: () => request<ApiResp<DBStats>>('/api/v1/ops/db-stats'),

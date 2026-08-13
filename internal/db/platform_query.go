@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // 本文件提供平台后端(cmd/platform)的只读查询方法。
@@ -578,4 +580,118 @@ func (s *Store) ExportConversations(ctx context.Context, f ConversationFilter, l
 	f.Size = limit
 	list, _, err := s.ListConversations(ctx, f)
 	return list, err
+}
+
+// KnowledgePair 知识问答对(知识库核心资产)。
+type KnowledgePair struct {
+	ID          int64     `json:"id"`
+	Question    string    `json:"question"`
+	Answer      string    `json:"answer"`
+	CodeBlocks  int       `json:"code_blocks"`
+	FilePaths   []string  `json:"file_paths"`
+	Keywords    []string  `json:"keywords"`
+	Model       string    `json:"model"`
+	CallerName  string    `json:"caller_name"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// SearchKnowledgePairs 关键词检索问答对(pg_trgm 相似度 + keywords 数组匹配)。
+// q 为空时返回最近列表。
+func (s *Store) SearchKnowledgePairs(ctx context.Context, q string, page, size int) ([]KnowledgePair, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if size <= 0 || size > 100 {
+		size = 20
+	}
+	offset := (page - 1) * size
+
+	if q == "" {
+		// 无关键词: 最近知识(按对话时间倒序)
+		var total int64
+		if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM knowledge_pairs").Scan(&total); err != nil {
+			return nil, 0, err
+		}
+		rows, err := s.pool.Query(ctx, fmt.Sprintf(`
+			SELECT id, question, answer, code_blocks, file_paths, keywords,
+			       coalesce(model,''), coalesce(caller_name,''), created_at
+			FROM knowledge_pairs ORDER BY created_at DESC LIMIT %d OFFSET %d`, size, offset))
+		if err != nil {
+			return nil, 0, err
+		}
+		defer rows.Close()
+		list, _, err := scanKnowledgePairs(rows)
+		return list, total, err
+	}
+
+	// 有关键词: pg_trgm 相似度(中英混合) + keywords GIN 匹配, 加权排序
+	// 权重: 问题相似度 1.5x + 回答相似度 1x + 关键词命中加成
+	var total int64
+	ct := `
+		SELECT count(*) FROM knowledge_pairs
+		WHERE question % $1 OR answer % $1 OR keywords @> ARRAY[$1]::text[]`
+	if err := s.pool.QueryRow(ctx, ct, q).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
+		SELECT id, question, answer, code_blocks, file_paths, keywords,
+		       coalesce(model,''), coalesce(caller_name,''), created_at
+		FROM knowledge_pairs
+		WHERE question %% $1 OR answer %% $1 OR keywords @> ARRAY[$1]::text[]
+		ORDER BY (similarity(question, $1) * 1.5 + similarity(answer, $1) * 1.0
+		          + CASE WHEN keywords @> ARRAY[$1]::text[] THEN 0.3 ELSE 0 END) DESC,
+		         created_at DESC
+		LIMIT %d OFFSET %d`, size, offset), q)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	list, _, err := scanKnowledgePairs(rows)
+	return list, total, err
+}
+
+// scanKnowledgePairs 扫描问答对行。
+func scanKnowledgePairs(rows pgx.Rows) ([]KnowledgePair, int64, error) {
+	var out []KnowledgePair
+	for rows.Next() {
+		var kp KnowledgePair
+		var fp []string
+		var kw []string
+		if err := rows.Scan(&kp.ID, &kp.Question, &kp.Answer, &kp.CodeBlocks, &fp, &kw,
+			&kp.Model, &kp.CallerName, &kp.CreatedAt); err != nil {
+			return nil, 0, err
+		}
+		kp.FilePaths = fp
+		kp.Keywords = kw
+		out = append(out, kp)
+	}
+	// total 由调用方传入; 这里只返回列表
+	return out, int64(len(out)), rows.Err()
+}
+
+// KnowledgePairStats 问答对知识统计。
+type KnowledgePairStats struct {
+	Total        int64     `json:"total"`
+	WithCode     int64     `json:"with_code"`
+	WithFiles    int64     `json:"with_files"`
+	AvgAnswerLen int64     `json:"avg_answer_len"`
+	Oldest       time.Time `json:"oldest"`
+	Newest       time.Time `json:"newest"`
+}
+
+// GetKnowledgePairStats 知识问答对总览统计。
+func (s *Store) GetKnowledgePairStats(ctx context.Context) (*KnowledgePairStats, error) {
+	var st KnowledgePairStats
+	err := s.pool.QueryRow(ctx, `
+		SELECT count(*),
+		       count(*) FILTER (WHERE code_blocks > 0),
+		       count(*) FILTER (WHERE cardinality(file_paths) > 0),
+		       coalesce(avg(length(answer)), 0)::bigint,
+		       min(created_at), max(created_at)
+		FROM knowledge_pairs`).Scan(
+		&st.Total, &st.WithCode, &st.WithFiles, &st.AvgAnswerLen, &st.Oldest, &st.Newest)
+	if err != nil {
+		return nil, err
+	}
+	return &st, nil
 }

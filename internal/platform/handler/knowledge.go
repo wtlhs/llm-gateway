@@ -50,3 +50,37 @@ func (h *Handler) GetSystemPrompt(w http.ResponseWriter, r *http.Request) {
 		"content":    content,
 	})
 }
+
+// SearchKnowledgePairs GET /api/v1/knowledge/search?q=...
+// 知识问答对检索(pg_trgm 相似度 + keywords 匹配, 加权排序)。
+func (h *Handler) SearchKnowledgePairs(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	query := q.Get("q")
+	page, _ := strconv.Atoi(q.Get("page"))
+	size, _ := strconv.Atoi(q.Get("size"))
+
+	ctx, cancel := h.withTimeout(r)
+	defer cancel()
+	list, total, err := h.store.SearchKnowledgePairs(ctx, query, page, size)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "search failed: "+err.Error())
+		return
+	}
+	if list == nil {
+		list = []db.KnowledgePair{}
+	}
+	writeList(w, list, total, page, size)
+}
+
+// KnowledgePairStats GET /api/v1/knowledge/pair-stats
+// 知识问答对总览统计。
+func (h *Handler) KnowledgePairStats(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := h.withTimeout(r)
+	defer cancel()
+	st, err := h.store.GetKnowledgePairStats(ctx)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "stats failed: "+err.Error())
+		return
+	}
+	writeOK(w, st)
+}

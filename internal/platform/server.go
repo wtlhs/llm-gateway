@@ -77,6 +77,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/knowledge/configs", wrap(h.ListSystemPrompts))
 	mux.Handle("GET /api/v1/knowledge/configs/{hash}", wrap(h.GetSystemPrompt))
 	mux.Handle("GET /api/v1/knowledge/stats", wrap(h.KnowledgeStats))
+	// 知识库(问答对层)
+	mux.Handle("GET /api/v1/knowledge/search", wrap(h.SearchKnowledgePairs))
+	mux.Handle("GET /api/v1/knowledge/pair-stats", wrap(h.KnowledgePairStats))
 
 	// 运维监控
 	mux.Handle("GET /api/v1/ops/db-stats", wrap(h.DBStats))
