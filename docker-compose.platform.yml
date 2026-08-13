@@ -1,22 +1,27 @@
 # 平台后端部署(独立于网关, 见 docs/PLATFORM_DESIGN.md)
+# 对外: nginx platform.wtlhs.com → 127.0.0.1:8089(host 8089 避开 smart-guide 占用的 8088)
 services:
   platform:
     image: llm-platform:local
     container_name: llm-platform
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8088:8088"
+      - "127.0.0.1:8089:8088"
     environment:
       - PLATFORM_LISTEN_ADDR=:8088
-      # 沉淀库(与网关共用 PG, 用容器名; 真实密码见 .env.deploy)
-      - PLATFORM_DB_URL=postgres://user_admin:${PG_PASSWORD}@1Panel-postgresql-AWYE:5432/llm_gateway?sslmode=disable
+      # 沉淀库(与网关共用 PG; 复用 .env 的 CONTEXT_DB_URL, 容器名直连)
+      - PLATFORM_DB_URL=${CONTEXT_DB_URL}
       # ===== 安全配置(生产必填) =====
-      # 鉴权 token(留空=仅localhost访问, 生产必须设置)
+      # 管理员登录(单账号, httpOnly cookie 会话)
+      - PLATFORM_ADMIN_USER=${PLATFORM_ADMIN_USER:-admin}
+      - PLATFORM_ADMIN_PASSWORD=${PLATFORM_ADMIN_PASSWORD}
+      - PLATFORM_SESSION_TTL=${PLATFORM_SESSION_TTL:-24h}
+      # 旧 Bearer token(兼容存量, 未配密码时兜底)
       - PLATFORM_AUTH_TOKEN=${PLATFORM_AUTH_TOKEN}
-      # IP 白名单(逗号分隔 CIDR; 留空=不限; 建议设内网段)
-      - PLATFORM_ALLOW_IPS=127.0.0.1,10.0.0.0/8,172.16.0.0/12
+      # IP 白名单(逗号分隔 CIDR; 留空=不限, 靠 PLATFORM_AUTH_TOKEN 鉴权)
+      - PLATFORM_ALLOW_IPS=
       # CORS 来源(生产建议具体域名, 不用 *)
-      - PLATFORM_CORS_ORIGINS=https://newapi.wtlhs.com
+      - PLATFORM_CORS_ORIGINS=https://platform.wtlhs.com
       # 速率限制(每分钟请求数/IP)
       - PLATFORM_RATE_LIMIT_PER_MIN=120
       # ===== 其他 =====
@@ -25,6 +30,12 @@ services:
       - PLATFORM_LOG_LEVEL=info
     networks:
       - 1panel-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8088/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     deploy:
       resources:
         limits:

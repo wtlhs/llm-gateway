@@ -31,3 +31,8 @@ web/tsconfig.tsbuildinfo
 # 交叉编译产物(本地构建用, 不入库)
 llm-gateway-linux
 
+
+# llm-platform 交叉编译产物与 embed 构建产物(只保留 .gitkeep)
+platform-linux
+internal/platform/web_dist/*
+!internal/platform/web_dist/.gitkeep
