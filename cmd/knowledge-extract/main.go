@@ -96,11 +96,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 去重: 同一 question 保留回答最长的一条(质量优化)
+	dupDeleted, derr := st.Deduplicate(ctx)
+	if derr != nil {
+		slog.Error("deduplicate failed", "err", derr)
+		os.Exit(1)
+	}
+
 	total, _ := st.Count(ctx)
 	slog.Info("extraction complete",
 		"scanned", scanned,
 		"extracted", extracted,
 		"skipped", skipped,
+		"dedup_deleted", dupDeleted,
 		"total_in_table", total,
 	)
 }

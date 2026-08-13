@@ -143,6 +143,22 @@ func (s *Store) Count(ctx context.Context) (int64, error) {
 	return c, err
 }
 
+// Deduplicate 删除重复问答对: 同一 question 保留回答最长(最完整)的一条。
+// 删除条件: 存在同 question 且 answer 更长的另一条记录。
+// 返回删除条数。
+func (s *Store) Deduplicate(ctx context.Context) (int64, error) {
+	const q = `
+		DELETE FROM knowledge_pairs a
+		USING knowledge_pairs b
+		WHERE a.question = b.question
+		  AND length(a.answer) < length(b.answer)`
+	tag, err := s.pool.Exec(ctx, q)
+	if err != nil {
+		return 0, fmt.Errorf("deduplicate: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // Truncate 清空表(用于完全重跑)。
 func (s *Store) Truncate(ctx context.Context) error {
 	_, err := s.pool.Exec(ctx, `TRUNCATE knowledge_pairs RESTART IDENTITY CASCADE`)

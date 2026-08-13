@@ -30,10 +30,15 @@ const (
 
 // noiseQuestionRe 匹配明显无知识价值的问题(会话标题生成/系统提示/system-reminder 注入等)。
 // 注意: 中文后无单词边界, 不能用 \b 收尾; 用宽松前缀匹配。
-var noiseQuestionRe = regexp.MustCompile(`(?i)^\s*(<session>|<transcript>|generate a (title|name)|为这次对话|你是什么模型|<system-reminder>|As you answer the user|<user_input>)`)
+var noiseQuestionRe = regexp.MustCompile(`(?i)^\s*(<session>|<transcript>|generate a (title|name)|为这次对话|你是什么模型|<system-reminder>|As you answer the user|<user_input>|Analyze this Claude Code session|Create a new anchored summary|Update the anchored summary|You are investigating a data-linkage question|Search the codebase|Summarize|\[User answered AskUserQuestion\])`)
 
 // chitChatRe 匹配纯闲聊(无业务知识)的问题。
 var chitChatRe = regexp.MustCompile(`(?i)^\s*(你好|哈罗|hello|hi|谢谢|thank|再见|拜拜|你是谁|你会什么|测试|test)\s*$`)
+
+// processAnswerRe 匹配 agent 的"中间过程"回答(探索性/工具调用前思考), 非最终答案。
+// 这些回答以"我找到/让我/我需要/我明白"等开头, 是 tool_use 中间轮, 无知识价值。
+// 注意: 仅当回答较短时才过滤(长回答即使是过程也可能含完整结论)。
+var processAnswerRe = regexp.MustCompile(`(?i)^\s*(我找到了|让我|我需要|我明白|我理解了|让我先|现在我知道了|很好的|让我快速|让我继续|让我查看|我需要先|让我搜索|让我读取|找到了关键|找到了核心|Let me|I found|I need to|I should|Now I|First, let me)`)
 
 // codeBlockRe 匹配 markdown 代码块 ```lang ... ```。
 var codeBlockRe = regexp.MustCompile("```[^`\n]*\n[\\s\\S]*?```|`[^`\n]+`")
@@ -70,6 +75,10 @@ func Extract(promptRaw, completionRaw, model, callerName, endpoint string) *Pair
 	// 空回答/纯工具调用占位过滤
 	trimmed := strings.TrimSpace(answer)
 	if trimmed == "" || trimmed == "{}" {
+		return nil
+	}
+	// 中间过程回答过滤: 探索性开头 + 回答较短(<300字符) → 非最终答案
+	if len([]rune(answer)) < 300 && processAnswerRe.MatchString(answer) {
 		return nil
 	}
 

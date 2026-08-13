@@ -240,6 +240,38 @@ func TestExtract_UserInputTag(t *testing.T) {
 	}
 }
 
+// TestExtract_FilterProcessAnswer 回归: agent 中间过程回答(探索性开头+较短)
+// 不是最终答案, 应被过滤(如"让我先查看..."、"我找到了关键文件")。
+func TestExtract_FilterProcessAnswer(t *testing.T) {
+	prompt := `{"messages":[{"role":"user","content":"检查业务1取消流程"}]}`
+	// 中间过程: 以"让我"开头 + 短
+	procComp := `{"choices":[{"message":{"content":"让我先查看 cancel 方法，了解取消入口的具体实现。"}}]}`
+	if p := Extract(prompt, procComp, "m", "", "messages"); p != nil {
+		t.Fatalf("expected nil for process answer, got %+v", p)
+	}
+	// 完整回答: 不以探索性短语开头(直接给结论), 保留
+	fullComp := `{"choices":[{"message":{"content":"业务1的取消流程分析如下：首先检查订单状态是否允许取消，其次校验卡派推送状态是否成功，根据推送结果决定走拦截流程还是直接取消，然后更新数据库状态并记录操作日志，最后通知相关系统同步状态。整个流程涉及拦截服务和仓库取消服务两个核心组件协同处理。"}}]}`
+	if p := Extract(prompt, fullComp, "m", "", "messages"); p == nil {
+		t.Fatal("expected pair for full answer")
+	}
+}
+
+// TestExtract_FilterSystemInstruction 回归: Claude Code 系统指令(会话分析/
+// 摘要生成)不是用户真实问题, 应被过滤。
+func TestExtract_FilterSystemInstruction(t *testing.T) {
+	completion := `{"choices":[{"message":{"content":"这是一个足够长的回答内容用于通过长度过滤测试，大概五十个字符以上吧，这里继续补充更多内容确保长度足够。"}}]}`
+	for _, q := range []string{
+		"Analyze this Claude Code session and extract structured facts",
+		"Create a new anchored summary from the conversation history",
+		"Search the codebase for retry logic",
+	} {
+		prompt := `{"messages":[{"role":"user","content":"` + q + `"}]}`
+		if p := Extract(prompt, completion, "m", "", "messages"); p != nil {
+			t.Errorf("expected nil for system instruction %q, got %+v", q, p.Question)
+		}
+	}
+}
+
 // ============ 解析细节 ============
 
 func TestExtract_AnthropicCompletionFallback(t *testing.T) {
