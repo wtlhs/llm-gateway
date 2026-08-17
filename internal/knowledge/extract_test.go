@@ -348,3 +348,29 @@ func TestExtract_CodeBlocks(t *testing.T) {
 		t.Errorf("code blocks = %d, want 2", n)
 	}
 }
+
+// TestExtractQuestion_RawRedacted 回归: 存量 raw 包装 + 脱敏非法值("maximum":****4321)
+// 时, 解包后 repair 再解析, 仍能提取出最后 user 消息(2026-08-17 宽容化)。
+func TestExtractQuestion_RawRedacted(t *testing.T) {
+	// 模拟网关 redact 脱敏后的请求体: "maximum" 值被替换成 ****4321(非法 JSON)
+	inner := `{"model":"glm-5.2","tools":[{"maximum":****4321,"minimum":-****4321}],"messages":[{"role":"user","content":"如何修复分类顺序问题"}]}`
+	rawWrapped, _ := json.Marshal(map[string]string{"raw": inner})
+	q := extractQuestion(string(rawWrapped))
+	if !strings.Contains(q, "分类顺序") {
+		t.Errorf("question=%q, want contains 分类顺序", q)
+	}
+}
+
+// TestExtract_RawRedacted 整条 Extract 对 raw+脱敏数据成功产出问答对。
+func TestExtract_RawRedacted(t *testing.T) {
+	inner := `{"model":"glm-5.2","messages":[{"role":"user","content":"帮我修复分页显示问题"}]}`
+	rawWrapped, _ := json.Marshal(map[string]string{"raw": inner})
+	completion := `{"choices":[{"message":{"content":"已定位到分页逻辑在 PageList.vue 第 42 行, 修复了 offset 计算错误并补充了边界处理, 同时新增了对应单测覆盖空列表场景。"}}]}`
+	p := Extract(string(rawWrapped), completion, "glm-5.2", "zhaoshunyao", "messages")
+	if p == nil {
+		t.Fatal("Extract should return pair for raw+redacted prompt")
+	}
+	if !strings.Contains(p.Question, "分页") || !strings.Contains(p.Answer, "PageList.vue") {
+		t.Errorf("pair mismatch: q=%q a=%q", p.Question, p.Answer)
+	}
+}

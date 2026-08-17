@@ -404,6 +404,11 @@ func safeJSON(b []byte) []byte {
 	return wrapped
 }
 
+func RepairJSON(b []byte) []byte { return repairJSON(b) }
+
+// RepairJSONScan 直接修复(跳过预检), 供已知输入非法的批量回填场景使用。
+func RepairJSONScan(b []byte) []byte { return repairJSONScan(b) }
+
 // repairJSON 修复常见非法 JSON 片段(状态机, 仅处理字符串外的结构层)。
 // 背景: Claude Code 生成的工具 JSON Schema 含 Python 风格非法值
 // ("maximum":* / "minimum":None / True / False 等), New API/上游宽容处理,
@@ -416,6 +421,15 @@ func safeJSON(b []byte) []byte {
 // 对合法 JSON 是 no-op(上述 token 在合法 JSON 结构层不存在), 可安全用于任意输入。
 func repairJSON(b []byte) []byte {
 	if len(b) == 0 || json.Valid(b) {
+		return b
+	}
+	return repairJSONScan(b)
+}
+
+// repairJSONScan 直接执行修复状态机(跳过 json.Valid 预检)。
+// 供已知输入非法的场景(如存量 raw 回填)使用, 省一次 O(n) 扫描。
+func repairJSONScan(b []byte) []byte {
+	if len(b) == 0 {
 		return b
 	}
 	var sb strings.Builder
@@ -442,8 +456,27 @@ func repairJSON(b []byte) []byte {
 			sb.WriteByte(c)
 			i++
 		case c == '*':
+			// 脱敏数字值: 星号串 + 可选数字尾(如 ****4321, 网关 redact 产出) → null
+			j := i
+			for j < len(b) && b[j] == '*' {
+				j++
+			}
+			for j < len(b) && b[j] >= '0' && b[j] <= '9' {
+				j++
+			}
 			sb.WriteString("null")
-			i++
+			i = j
+		case c == '-' && i+1 < len(b) && b[i+1] == '*':
+			// 负脱敏数字值: -****4321 → null
+			j := i + 1
+			for j < len(b) && b[j] == '*' {
+				j++
+			}
+			for j < len(b) && b[j] >= '0' && b[j] <= '9' {
+				j++
+			}
+			sb.WriteString("null")
+			i = j
 		case c == 'N' && matchToken(b, i, "None"):
 			sb.WriteString("null")
 			i += 4

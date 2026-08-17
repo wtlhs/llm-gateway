@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/company/llm-gateway/internal/audit"
 )
 
 // Pair 是一条知识单元: 用户问题 + agent 回答 + 知识权重特征。
@@ -117,8 +119,16 @@ func extractQuestion(promptRaw string) string {
 		} `json:"messages"`
 	}
 	if err := json.Unmarshal([]byte(body), &doc); err != nil {
-		// 部分请求无 messages(如 /models、count_tokens), 无问题可提取
-		return ""
+		// 宽容化(2026-08-17): 存量 raw 内容含脱敏值("maximum":****4321 等)导致
+		// JSON 非法, 解包后无法解析。用 repairJSON 修复常见非法片段后重试,
+		// 使历史数据也可提取(无需回填表, 提取时动态修复, 避免 1MB JSONB 更新膨胀)。
+		if fixed := audit.RepairJSONScan([]byte(body)); len(fixed) > 0 {
+			if err := json.Unmarshal(fixed, &doc); err != nil {
+				return ""
+			}
+		} else {
+			return ""
+		}
 	}
 	// 取最后一条 user 消息(问题通常在末尾; 中间 user 是上下文/历史)
 	for i := len(doc.Messages) - 1; i >= 0; i-- {
@@ -227,10 +237,11 @@ func unwrapPrompt(promptRaw string) (string, bool) {
 			cur = wrap.Raw
 			continue
 		}
-		// 无 raw 也无 messages: 放弃
-		return cur, false
+		// 内容无法直接解析(可能含脱敏非法值 "maximum":****4321 等):
+		// 返回已解包内容, 由调用方 repair 后重试解析
+		return cur, true
 	}
-	return cur, false
+	return cur, true
 }
 
 // stripSystemReminder 剥离 Anthropic 注入的 <system-reminder>...</system-reminder> 块。
