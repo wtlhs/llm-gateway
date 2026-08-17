@@ -104,16 +104,38 @@ func (a *anthropicAggregator) parseEvent(event string, data []byte) {
 }
 
 // parseMessageStart 提取 input_tokens(model 在 message_start 里也有, 但 model 由 prompt 侧已提取)。
+// usage 兜底: 部分上游(如 GLM Anthropic 兼容层) input_tokens 恒为 0, 但可能把真实值
+// 放在 usage.cache_creation.input_tokens / usage.cache_read.input_tokens(Anthropic 规范字段),
+// 此时求和作为 prompt_tokens。若两者都缺失/为 0, 由 Finalize 的本地估算兜底。
 func (a *anthropicAggregator) parseMessageStart(data []byte) {
 	var msg struct {
 		Message struct {
 			Usage struct {
-				InputTokens int32 `json:"input_tokens"`
+				InputTokens    int32 `json:"input_tokens"`
+				CacheCreation  *struct {
+					InputTokens int32 `json:"input_tokens"`
+				} `json:"cache_creation"`
+				CacheRead *struct {
+					InputTokens int32 `json:"input_tokens"`
+				} `json:"cache_read"`
 			} `json:"usage"`
 		} `json:"message"`
 	}
-	if json.Unmarshal(data, &msg) == nil {
-		a.promptTokens = msg.Message.Usage.InputTokens
+	if json.Unmarshal(data, &msg) != nil {
+		return
+	}
+	a.promptTokens = msg.Message.Usage.InputTokens
+	if a.promptTokens == 0 && (msg.Message.Usage.CacheCreation != nil || msg.Message.Usage.CacheRead != nil) {
+		sum := int32(0)
+		if msg.Message.Usage.CacheCreation != nil {
+			sum += msg.Message.Usage.CacheCreation.InputTokens
+		}
+		if msg.Message.Usage.CacheRead != nil {
+			sum += msg.Message.Usage.CacheRead.InputTokens
+		}
+		if sum > 0 {
+			a.promptTokens = sum
+		}
 	}
 }
 

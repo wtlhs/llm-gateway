@@ -122,6 +122,14 @@ func TestExtractAgentName(t *testing.T) {
 		{"YouAreCN", "你是一个代码审查专家", "", "代码审查专家"},
 		{"CallerTagFallback", "some random prompt without name", "my-agent", "my-agent"},
 		{"Unknown", "random text", "", "unknown"},
+		// 已知名单: 无冠词写法(旧正则 a/an/the 无法匹配, 曾归为 unknown)
+		{"KnownOpencode", "You are opencode, an interactive CLI tool that helps users with software engineering tasks", "", "opencode"},
+		{"KnownZCode", "You are ZCode, an interactive coding agent", "", "ZCode"},
+		{"KnownZCodeExplore", "You are ZCode Explore, a file search and codebase specialist", "", "ZCode Explore"},
+		{"KnownClaude", "x-anthropic-billing-header: cc_version=2.1.227.55f; cc_entrypoint=claude-vscode;You are Claude, an interactive agent that helps users with software engineering tasks", "", "Claude"},
+		{"KnownTrae", "You are TraeCode, an interactive agent", "", "TraeCode"},
+		{"KnownGemini", "You are Gemini CLI, a coding assistant", "", "Gemini CLI"},
+		{"KnownCopilot", "You are Copilot, an AI pair programmer", "", "Copilot"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

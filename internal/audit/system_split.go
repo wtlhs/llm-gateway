@@ -108,12 +108,18 @@ func contentFieldToString(c any) string {
 }
 
 // 启发式提取 agent 名(docs/KNOWLEDGE_LAYER.md §3.3)。
-// 优先级: <Name>X</Name> > "你是X"/"You are X" > caller_tag > "unknown"
+// 优先级: <Name>X</Name> > 已知 agent 名单(You are X) > "你是X"/"You are a X" > caller_tag > "unknown"
 var (
 	reNameTag  = regexp.MustCompile(`(?s)<Name>\s*(.+?)\s*</Name>`)
 	reYouAreEN = regexp.MustCompile(`(?i)You are\s+(?:a|an|the)\s+([A-Za-z0-9_\- ]+?)[\.,\n]`)
 	reYouAreCN = regexp.MustCompile(`你是(?:一个|一名|一位)?\s*([^\s,，。.!！\n]{2,20})`)
 	reRoleTag  = regexp.MustCompile(`(?s)<Role>.*?名称[:：]\s*(.+?)[\n<]`)
+
+	// 已知 agent 名单(大小写不敏感, 词边界): 覆盖主流 coding agent。
+	// 注意: 交替顺序按"更长短语优先", 避免 ZCode Explore 被 ZCode 抢先匹配。
+	// 匹配 "You are <name>"(无冠词直接跟名字) —— 旧正则要求 a/an/the 冠词,
+	// 导致 opencode / ZCode / Claude 等无冠词写法全部落空, 归为 unknown。
+	reAgentKnown = regexp.MustCompile(`(?i)\bYou are\s+(ZCode Explore|ZCode|opencode|Trae IDE|TraeCode|Gemini CLI|Qwen Code|Windsurf|Roo Code|Amazon Q|Cursor|Copilot|Cline|Aider|Codex|Claude|Cody|Continue|Kilo|Mentat|OpenHands|SWE-agent)\b`)
 )
 
 // extractAgentName 从 system prompt 内容启发式提取 agent 名。尽力而为, 失败返回 "unknown"。
@@ -122,15 +128,19 @@ func extractAgentName(content, callerTag string) string {
 	if m := reNameTag.FindStringSubmatch(content); len(m) > 1 {
 		return cleanAgentName(m[1])
 	}
-	// 2. "You are a X"
+	// 2. 已知 agent 名单(优先于通用冠词规则: 无冠词写法 "You are opencode," 等)
+	if m := reAgentKnown.FindStringSubmatch(content); len(m) > 1 {
+		return cleanAgentName(m[1])
+	}
+	// 3. "You are a X"
 	if m := reYouAreEN.FindStringSubmatch(content); len(m) > 1 {
 		return cleanAgentName(m[1])
 	}
-	// 3. "你是X"(中文)
+	// 4. "你是X"(中文)
 	if m := reYouAreCN.FindStringSubmatch(content); len(m) > 1 {
 		return cleanAgentName(m[1])
 	}
-	// 4. caller_tag 兜底(token 名往往含 agent 标识)
+	// 5. caller_tag 兜底(token 名往往含 agent 标识)
 	if callerTag != "" && callerTag != "unknown" {
 		return callerTag
 	}

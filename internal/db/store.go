@@ -36,6 +36,7 @@ type Conversation struct {
 	HTTPStatus        int
 	PromptTokens      int32
 	CompletionTokens  int32
+	UsageEstimated    bool   // prompt_tokens 为本地估算(上游未返回 usage)
 	ErrorMessage      string // 可空
 	ClientIP          string
 	Redacted          bool
@@ -97,8 +98,8 @@ INSERT INTO llm_conversation (
     token_key_hash, model, endpoint, is_stream, prompt_text, completion_text,
     tool_calls, request_body_hash, http_status, prompt_tokens, completion_tokens,
     error_message, client_ip, redacted, truncated, upstream_latency_ms,
-    total_latency_ms, version, system_prompt_hash, system_prompt_size
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,1,$24,$25)
+    total_latency_ms, version, system_prompt_hash, system_prompt_size, usage_estimated
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,1,$24,$25,$26)
 ON CONFLICT (request_id) DO NOTHING
 RETURNING id;`
 	tag, err := s.pool.Exec(ctx, sql,
@@ -110,6 +111,7 @@ RETURNING id;`
 		nullable(c.ErrorMessage), nullable(c.ClientIP), c.Redacted, c.Truncated,
 		c.UpstreamLatencyMs, c.TotalLatencyMs,
 		nullable(c.SystemPromptHash), nullableInt(c.SystemPromptSize),
+		c.UsageEstimated,
 	)
 	if err != nil {
 		return err

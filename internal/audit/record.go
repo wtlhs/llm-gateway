@@ -53,6 +53,7 @@ type Record struct {
 	ClientIP         string
 	Redacted         bool
 	Truncated        bool
+	UsageEstimated   bool // prompt_tokens 为本地估算(上游未返回 usage), 非上游真实值
 
 	// 性能观测
 	UpstreamLatencyMs int32
@@ -236,6 +237,21 @@ func (rec *Record) Finalize() {
 			rec.ErrorMessage = truncStr(rec.agg.errorMessage, 4096)
 		}
 	}
+	rec.fallbackEstimatePromptTokens()
+}
+
+// fallbackEstimatePromptTokens 上游未返回 prompt usage 时的本地估算兜底。
+// 背景: GLM 等上游的 Anthropic 兼容层 message_start.usage 恒为 0(实测 input_tokens=0),
+// 导致 prompt_tokens 列大量为 0, 影响 token 计量统计。
+// 仅当上游值缺失(0)时估算, 并用 UsageEstimated 标记, 平台可按此列区分真实/估算值。
+func (rec *Record) fallbackEstimatePromptTokens() {
+	if rec.PromptTokens != 0 || rec.UsageEstimated {
+		return
+	}
+	if est := estimatePromptTokens(rec.PromptText); est > 0 {
+		rec.PromptTokens = est
+		rec.UsageEstimated = true
+	}
 }
 
 // SetNonStreamCompletion 用于非流式响应(§5.1 WrapResponseBody 读完后调用)。
@@ -255,6 +271,7 @@ func (rec *Record) SetNonStreamCompletion(body []byte) {
 		}
 		rec.PromptTokens = pTok
 		rec.CompletionTokens = cTok
+		rec.fallbackEstimatePromptTokens()
 		return
 	}
 	rec.CompletionText = json.RawMessage(safeJSON(body))
@@ -326,6 +343,7 @@ func (rec *Record) StripContent() *Record {
 		HTTPStatus:        rec.HTTPStatus,
 		PromptTokens:      rec.PromptTokens,
 		CompletionTokens:  rec.CompletionTokens,
+		UsageEstimated:    rec.UsageEstimated,
 		ErrorMessage:      rec.ErrorMessage,
 		ClientIP:          rec.ClientIP,
 		Redacted:          rec.Redacted,
@@ -382,4 +400,33 @@ func truncStr(s string, max int) string {
 		return s
 	}
 	return s[:max] + "...[truncated]"
+}
+
+// estimatePromptTokens 从请求体 JSON 粗估 input token 数(上游未返回 usage 时的兜底)。
+// 规则: 剥离 JSON 结构字符后按 ~2 字符/token 近似(中英文混合粗估, 英文会略高估)。
+// 仅供统计参考, 精确值以上游 usage 为准; 调用方须标记 UsageEstimated。
+// PromptText 可能被 MaxBodyBytes 截断, 估算值可能偏低——同样由 UsageEstimated 标记兜底。
+func estimatePromptTokens(promptJSON json.RawMessage) int32 {
+	if len(promptJSON) == 0 {
+		return 0
+	}
+	n := 0
+	for _, r := range string(promptJSON) {
+		switch r {
+		case '{', '}', '[', ']', '"', ',', ':', ' ', '\n', '\t', '\r', '\\', '/':
+			continue
+		}
+		n++
+	}
+	if n <= 0 {
+		return 0
+	}
+	est := n / 2
+	if est < 1 {
+		est = 1
+	}
+	if est > 1<<24 { // 防溢出(int32 安全)
+		est = 1 << 24
+	}
+	return int32(est)
 }

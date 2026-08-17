@@ -233,6 +233,7 @@ func toDBRecord(rec *Record) *db.Conversation {
 		HTTPStatus:        rec.HTTPStatus,
 		PromptTokens:      rec.PromptTokens,
 		CompletionTokens:  rec.CompletionTokens,
+		UsageEstimated:    rec.UsageEstimated,
 		ErrorMessage:      rec.ErrorMessage,
 		ClientIP:          rec.ClientIP,
 		Redacted:          rec.Redacted,

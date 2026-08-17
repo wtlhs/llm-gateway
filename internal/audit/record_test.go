@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -178,5 +179,77 @@ func TestSafeJSON_InvalidUTF8(t *testing.T) {
 	ok := []byte(`{"model":"gpt-4o"}`)
 	if got := safeJSON(ok); string(got) != string(ok) {
 		t.Fatalf("safeJSON should pass through valid input, got %q", got)
+	}
+}
+
+// TestEstimatePromptTokens 估算函数: 剥离 JSON 结构字符后 ~2字符/token。
+func TestEstimatePromptTokens(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want int32 // >0 表示期望估算出值
+	}{
+		{"empty", ``, 0},
+		{"plain", `{"model":"glm-5.2","messages":[{"role":"user","content":"hello world this is a test"}]}`, 28}, // 56 文本+字段字符/2
+		{"chinese", `{"messages":[{"role":"user","content":"你好世界这是一个测试"}]}`, 16}, // 33 字符/2
+		{"only_struct", `{}{}[]:,"`, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := estimatePromptTokens(json.RawMessage(c.in))
+			if c.want == 0 {
+				if got != 0 {
+					t.Errorf("got %d, want 0", got)
+				}
+				return
+			}
+			if got != c.want {
+				t.Errorf("got %d, want %d", got, c.want)
+			}
+		})
+	}
+}
+
+// TestFinalize_UsageFallback 回归: 上游(如 GLM) message_start.usage 恒为 0 时,
+// Finalize 应用本地估算兜底并标记 UsageEstimated; 有真实值时不覆盖。
+func TestFinalize_UsageFallback(t *testing.T) {
+	t.Run("estimated_when_zero", func(t *testing.T) {
+		rec := &Record{IsStream: true, isAnthropic: true, startedAt: time.Now()}
+		rec.anthAgg = newAnthropicAggregator()
+		rec.anthAgg.append([]byte("event: message_start\n" +
+			`data: {"type":"message_start","message":{"usage":{"input_tokens":0}}}` + "\n\n"))
+		rec.PromptText = json.RawMessage(`{"model":"glm-5.2","messages":[{"role":"user","content":"hello world this is a test prompt for estimation"}]}`)
+		rec.Finalize()
+		if rec.PromptTokens == 0 {
+			t.Error("prompt_tokens should be estimated when upstream returns 0")
+		}
+		if !rec.UsageEstimated {
+			t.Error("UsageEstimated should be true for estimated value")
+		}
+	})
+
+	t.Run("keep_upstream_value", func(t *testing.T) {
+		rec := &Record{IsStream: true, isAnthropic: true, startedAt: time.Now()}
+		rec.anthAgg = newAnthropicAggregator()
+		rec.anthAgg.append([]byte("event: message_start\n" +
+			`data: {"type":"message_start","message":{"usage":{"input_tokens":1234}}}` + "\n\n"))
+		rec.PromptText = json.RawMessage(`{"model":"glm-5.2","messages":[{"role":"user","content":"hello world"}]}`)
+		rec.Finalize()
+		if rec.PromptTokens != 1234 {
+			t.Errorf("prompt_tokens = %d, want 1234 (upstream value kept)", rec.PromptTokens)
+		}
+		if rec.UsageEstimated {
+			t.Error("UsageEstimated should stay false for upstream value")
+		}
+	})
+}
+
+// TestParseMessageStart_CacheFallback 上游把真实值放 cache_creation/cache_read 时求和兜底。
+func TestParseMessageStart_CacheFallback(t *testing.T) {
+	a := newAnthropicAggregator()
+	a.append([]byte("event: message_start\n" +
+		`data: {"type":"message_start","message":{"usage":{"input_tokens":0,"cache_creation":{"input_tokens":500},"cache_read":{"input_tokens":300}}}}` + "\n\n"))
+	if a.promptTokens != 800 {
+		t.Errorf("promptTokens = %d, want 800 (cache_creation+cache_read)", a.promptTokens)
 	}
 }
