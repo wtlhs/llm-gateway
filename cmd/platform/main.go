@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	_ "time/tzdata" // 嵌入 IANA 时区数据(静态二进制无系统 tzdata, 否则 PLATFORM_TIMEZONE 失效)
 
 	"github.com/company/llm-gateway/internal/db"
 	"github.com/company/llm-gateway/internal/platform"
