@@ -107,18 +107,21 @@ func (rec *Record) SetPrompt(decoded, tail []byte, truncated bool) {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 
+	// 宽容化(2026-08-17): Claude Code 工具 schema 含非法 JSON 值("maximum":* 等),
+	// json.Valid 严格判定失败会导致 prompt_text 整体 raw 包装(结构丢失, ~92% 记录受影响)。
+	// 先修复常见非法片段, 使 system 提取与结构解析可用; 修复对合法 JSON 无副作用。
+	fixed := repairJSON(decoded)
+
 	// system 分流: 若是合法 JSON 且含 system, 提取并精简请求体
-	slimmed, sys := splitSystemPrompt(decoded)
+	slimmed, sys := splitSystemPrompt(fixed)
 	if sys.Has {
 		rec.SystemPromptText = sys.Content
 		rec.SystemPromptSize = len(sys.Content)
 		rec.SystemPromptHash = sha256Hex([]byte(sys.Content))
 		rec.SystemPromptAgent = extractAgentName(sys.Content, rec.CallerTag)
-		// request_body_hash 用原始请求体(完整, 含 system), 保证语义不变
-		rec.RequestBodyHash = sha256Hex(decoded)
-	} else {
-		rec.RequestBodyHash = sha256Hex(decoded)
 	}
+	// request_body_hash 始终基于原始字节(不随修复变化, 保持语义指纹)
+	rec.RequestBodyHash = sha256Hex(decoded)
 
 	rec.PromptText = json.RawMessage(safeJSON(slimmed))
 	rec.Truncated = truncated
@@ -378,12 +381,15 @@ func clientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-// safeJSON 保证落库的是合法 JSON; 非法则包成 {"raw": "..."}。
+// safeJSON 保证落库的是合法 JSON; 非法则先尝试修复常见片段, 仍失败才包成 {"raw": "..."}。
 // 注意: raw 保留全文不二次截断——截断已由 decodeMaybe 的 postMax(MaxBodyBytes)统一控制,
 // 这里再截会破坏数据完整性(coding agent 的 system prompt 会被砍, 看不到用户问题)。
 // 若原文超长, decodeMaybe 已在上游截断并标记 truncated, 此处只负责包装不合法的残缺 JSON。
 // 额外: json.Valid 只校验语法, 不校验 UTF-8 合法性——含非法 UTF-8 字节的 JSON 会通过
 // json.Valid 但被 PostgreSQL JSONB 拒绝(SQLSTATE 22P02), 因此必须同时校验 utf8.Valid。
+// 宽容化(2026-08-17): Claude Code 工具 schema 含非法值("maximum":* 等), 严格判定
+// 曾导致 prompt_text 整体 raw 包装(结构丢失, ~92% 记录)。修复常见片段后重试,
+// 尽量保留结构化; 修复无副作用(合法 JSON 不经过修复分支)。
 func safeJSON(b []byte) []byte {
 	if len(b) == 0 {
 		return []byte("{}")
@@ -391,8 +397,98 @@ func safeJSON(b []byte) []byte {
 	if json.Valid(b) && utf8.Valid(b) {
 		return b
 	}
+	if fixed := repairJSON(b); json.Valid(fixed) && utf8.Valid(fixed) {
+		return fixed
+	}
 	wrapped, _ := json.Marshal(map[string]string{"raw": string(b)})
 	return wrapped
+}
+
+// repairJSON 修复常见非法 JSON 片段(状态机, 仅处理字符串外的结构层)。
+// 背景: Claude Code 生成的工具 JSON Schema 含 Python 风格非法值
+// ("maximum":* / "minimum":None / True / False 等), New API/上游宽容处理,
+// 但 json.Valid 严格校验失败 → prompt_text 整体 raw 包装, 结构丢失。
+// 规则(字符串外):
+//   - 裸 * → null(合法 JSON 中 * 只能出现在字符串内, 字符串外必为非法值)
+//   - 裸 None → null; 裸 True → true; 裸 False → false(合法 JSON 布尔为小写)
+//   - 冗余尾逗号 ,} / ,] → 删除
+//
+// 对合法 JSON 是 no-op(上述 token 在合法 JSON 结构层不存在), 可安全用于任意输入。
+func repairJSON(b []byte) []byte {
+	if len(b) == 0 || json.Valid(b) {
+		return b
+	}
+	var sb strings.Builder
+	sb.Grow(len(b) + 16)
+	inStr := false
+	esc := false
+	for i := 0; i < len(b); {
+		c := b[i]
+		if inStr {
+			sb.WriteByte(c)
+			if esc {
+				esc = false
+			} else if c == '\\' {
+				esc = true
+			} else if c == '"' {
+				inStr = false
+			}
+			i++
+			continue
+		}
+		switch {
+		case c == '"':
+			inStr = true
+			sb.WriteByte(c)
+			i++
+		case c == '*':
+			sb.WriteString("null")
+			i++
+		case c == 'N' && matchToken(b, i, "None"):
+			sb.WriteString("null")
+			i += 4
+		case c == 'T' && matchToken(b, i, "True"):
+			sb.WriteString("true")
+			i += 4
+		case c == 'F' && matchToken(b, i, "False"):
+			sb.WriteString("false")
+			i += 5
+		case c == ',':
+			// 冗余尾逗号: 逗号后首个非空白是 } 或 ] → 删除逗号
+			j := i + 1
+			for j < len(b) && (b[j] == ' ' || b[j] == '\t' || b[j] == '\n' || b[j] == '\r') {
+				j++
+			}
+			if j < len(b) && (b[j] == '}' || b[j] == ']') {
+				i++ // 丢弃逗号
+				continue
+			}
+			sb.WriteByte(c)
+			i++
+		default:
+			sb.WriteByte(c)
+			i++
+		}
+	}
+	return []byte(sb.String())
+}
+
+// matchToken 判断 b[i:] 是否以 token 开头且两侧是标识符边界(避免误伤)。
+func matchToken(b []byte, i int, token string) bool {
+	if i+len(token) > len(b) || string(b[i:i+len(token)]) != token {
+		return false
+	}
+	if i > 0 && isIdentByte(b[i-1]) {
+		return false
+	}
+	if i+len(token) < len(b) && isIdentByte(b[i+len(token)]) {
+		return false
+	}
+	return true
+}
+
+func isIdentByte(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
 func truncStr(s string, max int) string {

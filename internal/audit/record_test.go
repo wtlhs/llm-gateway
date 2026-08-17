@@ -253,3 +253,88 @@ func TestParseMessageStart_CacheFallback(t *testing.T) {
 		t.Errorf("promptTokens = %d, want 800 (cache_creation+cache_read)", a.promptTokens)
 	}
 }
+
+// TestRepairJSON 宽容修复: 工具 schema 非法值 / 冗余尾逗号。
+func TestRepairJSON(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"bare_star", `{"maximum":*, "minimum":1}`, `{"maximum":null, "minimum":1}`},
+		{"none_token", `{"minimum":None, "x":1}`, `{"minimum":null, "x":1}`},
+		{"py_bool", `{"flag": True, "no": False}`, `{"flag": true, "no": false}`},
+		{"trailing_comma_obj", `{"a":1,}`, `{"a":1}`},
+		{"trailing_comma_arr", `[1,2,]`, `[1,2]`},
+		{"string_untouched", `{"text":"a*b True None", "n":1}`, `{"text":"a*b True None", "n":1}`},
+		{"valid_json_noop", `{"a":[1,2],"b":"x"}`, `{"a":[1,2],"b":"x"}`},
+		{"ident_boundary", `{"x":1, "key":TrueVal}`, `{"x":1, "key":TrueVal}`}, // TrueVal 不是 True 边界
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := string(repairJSON([]byte(c.in)))
+			if got != c.want {
+				t.Errorf("repairJSON(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// TestSafeJSON_RepairFallback 非法 JSON 修复后返回结构化而非 raw 包装。
+func TestSafeJSON_RepairFallback(t *testing.T) {
+	// 真实场景: Claude Code 工具 schema "maximum":*
+	bad := []byte(`{"model":"glm-5.2","tools":[{"maximum":*,"minimum":None}],"messages":[]}`)
+	out := safeJSON(bad)
+	if !json.Valid(out) {
+		t.Fatalf("safeJSON output not valid JSON: %q", out)
+	}
+	if strings.Contains(string(out), `"raw"`) {
+		t.Fatalf("should be repaired, not raw-wrapped: %q", out)
+	}
+	var doc struct {
+		Tools []json.RawMessage `json:"tools"`
+	}
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("repaired output not parseable: %v", err)
+	}
+	if len(doc.Tools) != 1 {
+		t.Fatalf("tools lost after repair: %q", out)
+	}
+	// 无法修复的残缺 JSON 仍走 raw 兜底
+	unfixable := []byte(`{"a": }`)
+	out2 := safeJSON(unfixable)
+	if !strings.Contains(string(out2), `"raw"`) {
+		t.Fatalf("unfixable should raw-wrap: %q", out2)
+	}
+}
+
+// TestSetPrompt_Repair 非法请求体经 SetPrompt 后 prompt_text 结构化且 system 可提取。
+func TestSetPrompt_Repair(t *testing.T) {
+	rec := &Record{}
+	// 含非法 schema 值 + system 消息
+	body := []byte(`{"model":"glm-5.2","system":"You are ZCode, an interactive coding agent","tools":[{"maximum":*}],"messages":[{"role":"user","content":"hi"}]}`)
+	rec.SetPrompt(body, nil, false)
+	if !json.Valid(rec.PromptText) {
+		t.Fatalf("prompt_text not valid JSON: %q", rec.PromptText)
+	}
+	if strings.Contains(string(rec.PromptText), `"raw"`) {
+		t.Fatalf("prompt_text should be structured, got raw-wrap: %q", rec.PromptText)
+	}
+	var doc struct {
+		Messages []json.RawMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(rec.PromptText, &doc); err != nil {
+		t.Fatalf("prompt_text not parseable: %v", err)
+	}
+	if len(doc.Messages) != 1 {
+		t.Fatalf("messages lost: %q", rec.PromptText)
+	}
+	// system 提取成功(修复后 splitSystemPrompt 可解析)
+	if rec.SystemPromptHash == "" || !strings.Contains(rec.SystemPromptText, "ZCode") {
+		t.Errorf("system not extracted after repair: hash=%q text=%q", rec.SystemPromptHash, rec.SystemPromptText)
+	}
+	// model 提取成功
+	if rec.Model != "glm-5.2" {
+		t.Errorf("model=%q", rec.Model)
+	}
+}
