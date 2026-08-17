@@ -37,8 +37,10 @@ type SourceRow struct {
 // 修复(2026-08-12): 原实现一次 Query 全量(ORDER BY id 触发全表排序, 2GB TEXT
 // cast 导致容器 OOM 被杀)。改为按 id 游标分页(WHERE id > last), 每批只加载
 // batchSize 行, 内存恒定, 支持超大表。
-func (s *Store) StreamSources(ctx context.Context, batchSize int, fn func([]SourceRow) error) error {
-	lastID := int64(0)
+// StreamSources 按 id 游标分页扫描有效对话源(startID 之后), 每批调用 fn。
+// startID=0 全量; 增量场景传 knowledge_pairs.max(conv_id) 只扫新增。
+func (s *Store) StreamSources(ctx context.Context, startID int64, batchSize int, fn func([]SourceRow) error) error {
+	lastID := startID
 	for {
 		const q = `
 			SELECT id, prompt_text::text, coalesce(completion_text::text, ''),

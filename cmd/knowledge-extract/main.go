@@ -1,10 +1,12 @@
 // Command knowledge-extract 从 llm_conversation 提取知识问答对到 knowledge_pairs 表。
 //
 // 用法:
-//   knowledge-extract --db-url <PG_URL> [--batch 500] [--truncate]
+//   knowledge-extract --db-url <PG_URL> [--batch 500] [--from-last] [--truncate]
 //
 // 说明:
 //   - 默认增量模式(ON CONFLICT conv_id 幂等 upsert), 可重复运行
+//   - --from-last 只处理 knowledge_pairs 未覆盖的新对话(起点 = max(conv_id)),
+//     适合高频定时(如 cron 每 15 分钟), 秒级完成; 首次运行等价全量
 //   - --truncate 先清空再全量提取(首次/重建时用)
 //   - 只读有效对话(2xx + 有 completion + 无 error_message)
 package main
@@ -26,6 +28,7 @@ func main() {
 	var (
 		dbURL    = flag.String("db-url", os.Getenv("CONTEXT_DB_URL"), "PostgreSQL URL (或 CONTEXT_DB_URL)")
 		batch    = flag.Int("batch", 500, "每批提取行数")
+		fromLast = flag.Bool("from-last", false, "仅处理 knowledge_pairs 未覆盖的新对话(增量)")
 		truncate = flag.Bool("truncate", false, "先清空 knowledge_pairs 再全量提取")
 		verbose  = flag.Bool("verbose", false, "输出每条提取明细(调试)")
 	)
@@ -56,11 +59,22 @@ func main() {
 		slog.Info("truncated knowledge_pairs")
 	}
 
+	// 增量起点: knowledge_pairs 已覆盖的最大 conv_id(默认 0 全量)
+	var startID int64
+	if *fromLast {
+		if err := pool.QueryRow(ctx,
+			`SELECT COALESCE(MAX(conv_id), 0) FROM knowledge_pairs`).Scan(&startID); err != nil {
+			slog.Error("query max conv_id", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("incremental mode", "start_conv_id", startID)
+	}
+
 	var (
 		scanned, extracted, skipped int
 		started                     = false
 	)
-	err = st.StreamSources(ctx, *batch, func(rows []knowledge.SourceRow) error {
+	err = st.StreamSources(ctx, startID, *batch, func(rows []knowledge.SourceRow) error {
 		if !started {
 			slog.Info("extraction started", "batch", *batch)
 			started = true
