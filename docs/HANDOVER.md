@@ -164,6 +164,13 @@ cron */15 分钟 → knowledge-extract(--from-last 增量) → knowledge_pairs �
 - [ ] **合规确认**：员工数据授权/匿名化抽检，找法务/安全评审
 - [ ] **新网关观察**：08-18 部署的脱敏宽容化网关（`953544d`）在白天工作时段 raw 率应归零，需抽查验证（`SELECT count(*) FROM llm_conversation WHERE created_at > now()-interval '24h' AND prompt_text::text LIKE '{"raw":%'`）
 
+### 训练数据管道（已完成，2026-08-19）
+- `cmd/build-training-data` + `internal/training`：从 llm_conversation 组装 OpenAI messages 训练样本
+- 全量产出 **15,364 条样本**（`/opt/llm-platform-build/train-data/train.jsonl`，1.56GB）
+- 清洗：脱敏残留→`<REDACTED>`、system-reminder 剥离、按 request_body_hash 去重；system 经 hash JOIN system_prompts（99% 覆盖）；工具轮占 85%
+- 复跑：`/opt/llm-platform-build/btd-linux --db-url <URL> --out <file> [--days N]`（增量用 `--days`，全量 6.5 分钟）
+- **下一步**：第 2 步合规确认 → 第 3 步小规模 SFT 验证（2-3K 样本 LoRA）
+
 ### 优先级中
 - [ ] **平台层展示 `usage_estimated`**：对话详情/统计标注"估算"（列已存在，平台未消费）
 - [ ] **提取器水位表**：cron 每次固定重扫 57 条无价值记录（`max(conv_id)` 不推进），当前 1 秒无害，可加独立水位表彻底消除
