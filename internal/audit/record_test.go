@@ -264,6 +264,8 @@ func TestRepairJSON(t *testing.T) {
 		{"bare_star", `{"maximum":*, "minimum":1}`, `{"maximum":null, "minimum":1}`},
 		{"redacted_num", `{"maximum":****4321, "minimum":-****4321}`, `{"maximum":null, "minimum":null}`},
 		{"redacted_single", `{"key":****}`, `{"key":null}`},
+		{"bad_escape", `{"note":"收件人\a***@example.com"}`, `{"note":"收件人a***@example.com"}`},
+		{"good_escape_kept", `{"note":"line\n tab\t \"q\" \\x"}`, `{"note":"line\n tab\t \"q\" \\x"}`},
 		{"none_token", `{"minimum":None, "x":1}`, `{"minimum":null, "x":1}`},
 		{"py_bool", `{"flag": True, "no": False}`, `{"flag": true, "no": false}`},
 		{"trailing_comma_obj", `{"a":1,}`, `{"a":1}`},

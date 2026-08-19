@@ -435,17 +435,26 @@ func repairJSONScan(b []byte) []byte {
 	var sb strings.Builder
 	sb.Grow(len(b) + 16)
 	inStr := false
-	esc := false
+	pendingBS := false // 字符串内遇到 \ 未定转义, 延迟写入以支持非法转义修复
 	for i := 0; i < len(b); {
 		c := b[i]
 		if inStr {
-			sb.WriteByte(c)
-			if esc {
-				esc = false
+			if pendingBS {
+				pendingBS = false
+				if isValidJSONEscape(c) {
+					sb.WriteByte('\\')
+					sb.WriteByte(c)
+				} else {
+					// 非法转义(如脱敏邮箱 \a***@example.com): 丢弃反斜杠保留字符
+					sb.WriteByte(c)
+				}
 			} else if c == '\\' {
-				esc = true
-			} else if c == '"' {
-				inStr = false
+				pendingBS = true
+			} else {
+				sb.WriteByte(c)
+				if c == '"' {
+					inStr = false
+				}
 			}
 			i++
 			continue
@@ -522,6 +531,16 @@ func matchToken(b []byte, i int, token string) bool {
 
 func isIdentByte(c byte) bool {
 	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+}
+
+// isValidJSONEscape 判断反斜杠后的字符是否为合法 JSON 转义(规范: " \ / b f n r t u)。
+// 非法转义(如 \a)是 redact 脱敏邮箱等场景的产物, 需修复。
+func isValidJSONEscape(c byte) bool {
+	switch c {
+	case '"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u':
+		return true
+	}
+	return false
 }
 
 func truncStr(s string, max int) string {
