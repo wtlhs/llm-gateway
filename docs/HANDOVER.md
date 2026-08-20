@@ -110,6 +110,31 @@ cron */15 分钟 → knowledge-extract(--from-last 增量) → knowledge_pairs �
 - cron 每 15 分钟（替换了 08-12 配置但从未成功执行的旧每日任务 `kb-extract.sh`——旧日志为空即根因）
 - 召回率结果：提取率 3.7% → 18.8%；knowledge_pairs 272 → **1,135 对**
 
+### 3.6 safeJSON 修复链收敛（08-17 ~ 08-19，三轮真实数据驱动）
+raw 率每轮都基于**真实流量定位新非法模式**后收敛，最终归零：
+| 轮次 | 非法模式 | 根因 | 修复 |
+|---|---|---|---|
+| 1 | `"maximum":*` / `None`/`True`/`False` | Claude Code 工具 schema Python 风格值 | `repairJSON` 状态机（08-17 `27e4586`） |
+| 2 | `"maximum":****4321` | 网关 redact 脱敏把数字替换成星号串+数字尾，状态机只处理单 `*` | 吞星号串+数字尾（含 `-****4321`）→ null（08-18 随提取器修复同批 `c9e6408` 导出 `RepairJSONScan`） |
+| 3 | `\a***@example.com` | redact 脱敏邮箱产出 `\a`（非法 JSON 转义，`\` 后只能跟 `" \ / b f n r t u`） | 延迟写入反斜杠：合法转义保留、非法丢弃（08-19 `47ab1ef`，已部署） |
+**验证**：08-19 04:05Z 新网关后 1,179+ 条记录 **raw=0.000%**，长时间窗口稳定。
+
+### 3.7 训练数据管道与合规（08-19 ~ 08-20）
+- `cmd/build-training-data` + `internal/training`：训练语料构建（16,442 条，详见第五章）
+- **PII 合规审计发现并修复**（详见 3.8 / 第五章）
+- `scripts/sft/`：第 3 步 SFT 实验脚本（prepare/train/evaluate/README）
+
+### 3.8 合规 PII 审计与修复（08-20）
+**审计发现（训练集 15,364 条）**：
+1. **网关 email 脱敏正则 `[\w.]+` 不含连字符** → 带连字符域名邮箱（`liulei@yuexin-logistics.com`/`yisong@wiser-bridge.com`）**漏脱敏**，训练集 3,010 条明文（assistant 498 + tool 2512）
+2. 内网 IP 明文 12,351 条（tool 结果/代码输出）
+3. 手机号 20 条（多为订单号误报）；"身份证"310 条命中经确认均为订单号/编码（未处理）
+
+**修复（双防线，commit `9b13d5c`）**：
+- 网关层：`redact.go` email 正则 `\b[\w.-]+@[\w.-]+\.\w+\b`（新数据生效）
+- 训练层：`internal/training/pii.go` 输出前强制二次清洗（邮箱→`<EMAIL>`、手机→`<PHONE>`、内网 IP→`<LAN_IP>`，覆盖消息 + tool_calls arguments，存量/新数据统一）
+- **复审计（16,442 样本）：email=0 / phone=0 / ip_lan=0 全部归零**
+
 ---
 
 ## 四、数据现状（08-18 快照）
@@ -136,66 +161,50 @@ cron */15 分钟 → knowledge-extract(--from-last 增量) → knowledge_pairs �
 
 ---
 
-## 五、训练大模型评估（咨询结论，08-18）
+## 五、训练大模型评估与执行进度（08-18 评估，08-20 更新）
 
-**数据画像**：31,617 条有效对话、14,369 条完整对话对（prompt 未截断+有回答，其中 >200 字符回答 6,446）、
-工具调用场景 47.4%（14,973 条）、领域 = 软件工程 coding agent 交互、中英混合。
+**数据画像**：31,617 条有效对话、16,442 条训练样本（`build-training-data` 产出）、
+工具调用场景 47.4%（训练集工具轮 85%）、领域 = 软件工程 coding agent 交互、中英混合。
 
-**评级：B-（可用于特定训练方向，需治理）**
+**评级：B+（PII 清洗后，可用于领域后训练）**
 
 **核心判断**：
 1. 数据是 **agent 行为轨迹**，不是通用语料 → 适合 **领域 SFT（编码 agent 对齐）/ RLHF 偏好对**，不适合通用预训练/基座
-2. **`knowledge_pairs` 不能直接当训练数据**：其过滤标准（去中间过程）是知识检索导向；训练需要**完整对话轨迹（含 tool_calls/thinking）**，数据源应是清洗后的 `llm_conversation`
-3. 规模：14K 对起步 + 15 分钟增量（年化 ~50 万条），先跑通管道再谈规模
-4. **合规前置**：训练前必须确认员工对话数据授权与公司数据分级（DEPLOY.md 上线评审项）
+2. **`knowledge_pairs` 不能直接当训练数据**：其过滤标准（去中间过程）是知识检索导向；训练需要**完整对话轨迹（含 tool_calls/thinking）**，数据源是清洗后的 `llm_conversation`
+3. 规模：16,442 条起步 + 15 分钟增量（年化 ~50 万条）
+4. **合规**：PII 已技术侧清零（email/phone/内网 IP = 0）；**人工授权确认待办**（员工授权/数据分级）
 
-**后续路线（待执行）**：
-- **第 1 步 训练数据管道**：`cmd/repair-prompt-backfill` 全量转结构化 → 构建 `training_dataset` 提取器（保留多轮轨迹+tool_calls，清洗规则与知识库不同：去 `****` 残留、去 system-reminder、去截断/错误记录、按 request 聚合多轮）
-- **第 2 步 合规确认**：员工授权/匿名化复核/人工抽检
-- **第 3 步 小规模验证**：2-3K 对做 domain SFT（Qwen/GLM 开源底座 LoRA），评测编码通过率/工具调用格式
-- **第 4 步 规模化**：管道稳定后全量，评估 RLHF 偏好对
+**执行进度**：
+- ✅ **第 1 步 训练数据管道**（08-19）：`cmd/build-training-data` + `internal/training`，产出 16,442 条（PII 清洗版 `train.jsonl`，1.68GB）
+- ✅ **第 2 步 合规技术侧**（08-20）：PII 审计 + 双防线修复 + 复审计归零；**人工决策待办见第六章**
+- ✅ **第 3 步脚本**（08-20）：`scripts/sft/`（prepare/train/evaluate/README）已就绪
+- ⏳ **第 3 步执行**：待 GPU 硬件（采购 DGX Spark GB10 已决策）→ 见第九章《训练执行手册》
+- ⬜ **第 4 步 规模化**：第 3 步验收通过后全量训练 + 持续增量 + 可选 RLHF 偏好对
 
 ---
 
 ## 六、遗留问题与后续任务清单（给接手 agent）
 
-### 优先级高
-- [ ] **训练数据管道**（见五，第 1 步）：全量 `repair-prompt-backfill` 转结构化 + `training_dataset` 提取器设计
-- [ ] **合规确认**：员工数据授权/匿名化抽检，找法务/安全评审
-- [ ] **新网关观察**：08-18 部署的脱敏宽容化网关（`953544d`）在白天工作时段 raw 率应归零，需抽查验证（`SELECT count(*) FROM llm_conversation WHERE created_at > now()-interval '24h' AND prompt_text::text LIKE '{"raw":%'`）
+### 已完成（本批）
+- ✅ 训练数据管道（第 1 步，08-19）：16,442 条 `train.jsonl`（PII 清洗版）
+- ✅ 合规技术侧（第 2 步技术部分，08-20）：PII 审计+双防线修复+复审计归零
+- ✅ 第 3 步实验脚本（08-20）：`scripts/sft/`（prepare/train/evaluate/README）
+- ✅ raw 率归零（08-19 起 1,179+ 条 0.000%，三轮修复链收敛）
+- ✅ 知识提取定时化（cron */15，召回率 18.8%，knowledge_pairs 1,340+ 对）
 
-### 训练数据管道（已完成，2026-08-19）
-- `cmd/build-training-data` + `internal/training`：从 llm_conversation 组装 OpenAI messages 训练样本
-- 全量产出 **15,364 条样本**（`/opt/llm-platform-build/train-data/train.jsonl`，1.56GB）
-- 清洗：脱敏残留→`<REDACTED>`、system-reminder 剥离、按 request_body_hash 去重；system 经 hash JOIN system_prompts（99% 覆盖）；工具轮占 85%
-- 复跑：`/opt/llm-platform-build/btd-linux --db-url <URL> --out <file> [--days N]`（增量用 `--days`，全量 6.5 分钟）
-- **下一步**：第 2 步合规确认 → 第 3 步小规模 SFT 验证（2-3K 样本 LoRA）
-
-### 合规确认（第 2 步，2026-08-20 进行中）
-**PII 审计发现（训练集 15,364 条）**：
-1. **网关 email 脱敏正则漏洞**：`[\w.]+` 不含连字符 → 带连字符域名邮箱（`liulei@yuexin-logistics.com` / `yisong@wiser-bridge.com`）**全部漏脱敏** → 训练集 3,010 条明文邮箱（assistant 498 + tool 2512）
-2. 内网 IP 明文 12,351 条（tool 结果/代码输出）；手机号 20 条（多为订单号误报）
-3. 身份证 18 位数字 310 条命中——**审计确认多为订单号/编码，非身份证**（未处理，误伤 > 收益）
-
-**已修复（commit `9b13d5c`）**：
-- `internal/audit/redact.go`：email 正则加连字符 `[\w.-]+`（新数据落库生效）
-- `internal/training/pii.go`：训练集输出前**强制二次清洗**（邮箱→`<EMAIL>`、手机→`<PHONE>`、内网 IP→`<LAN_IP>`），覆盖所有消息 + tool_calls arguments（存量/新数据统一，不依赖网关修复）
-- **复审计（16,442 样本）：email=0 / phone=0 / ip_lan=0 全部归零**
-
-**仍需人工/法务决策（未处理）**：
-- [ ] 员工对话数据用于训练的**授权确认**（8 个活跃用户，需 HR/法务审批流程）
-- [ ] 公司数据分级政策核验（LLM_AUDIT_TTL_DAYS=90、训练用途是否在合规范围）
-- [ ] 训练集含**公司内部业务信息**（项目名/内部系统名/业务数据）——内部训练可接受，外部训练/开源**禁止**
-- [ ] 复跑训练集后建议人工抽检 20-50 条样本确认无异常
-
-### 优先级中
+### 待执行（按优先级）
+- [ ] **合规人工决策（第 2 步剩余，训练前置硬门槛）**：
+  1. 员工对话数据**授权确认**（8 个活跃用户，HR/法务流程）
+  2. **公司数据分级核验**（训练用途是否合规范围；内部训练可接受，外部/开源禁止）
+  3. 训练集含公司内部业务信息——禁止模型/数据外发
+  4. 建议人工抽检 20-50 条样本
+- [ ] **第 3 步执行**：DGX Spark 到货后按第九章《训练执行手册》跑通小规模 SFT（预计 5-15 小时/轮）
+- [ ] **第 4 步规模化**：验收通过后全量 16,442 条 + 持续增量训练（15 分钟增量管道已在跑）
 - [ ] **平台层展示 `usage_estimated`**：对话详情/统计标注"估算"（列已存在，平台未消费）
-- [ ] **提取器水位表**：cron 每次固定重扫 57 条无价值记录（`max(conv_id)` 不推进），当前 1 秒无害，可加独立水位表彻底消除
-- [ ] **存量 raw 转结构化回填**（可选）：`cmd/repair-prompt-backfill`（dry-run 85% 可修复；注意全量 UPDATE 慢，建议分批/低峰）
-
-### 优先级低 / 观察
-- [ ] mimo-v2.5/kimi-k3 渠道配置（New API 侧，503 model_not_found）
-- [ ] GLM 上游稳定性观察（08-10/11 断开高峰）
+- [ ] **提取器水位表**：cron 每次固定重扫少量无价值记录（`max(conv_id)` 不推进），当前 1 秒无害，可加独立水位表
+- [ ] **存量 raw 转结构化回填**（可选）：`cmd/repair-prompt-backfill`（dry-run 85% 可修复；UPDATE 慢建议分批，当前提取器已动态修复不依赖）
+- [ ] **mimo-v2.5/kimi-k3 渠道配置**（New API 侧，503 model_not_found）
+- [ ] **GLM 上游稳定性观察**（08-10/11 出现过断开高峰，已回落）
 - [ ] 服务器 `/opt/llm-gateway-build/`、`/opt/llm-platform-build/` 构建中间文件清理
 
 ---
@@ -251,3 +260,75 @@ docs/                   DESIGN.md / PLATFORM_DESIGN.md / KNOWLEDGE_LAYER.md / DE
 
 **给接手 agent 的阅读建议**：先读本文档，再按需读 `DESIGN.md`（架构决策）、`DEPLOY.md`（部署 Runbook）、
 `docs/KNOWLEDGE_LAYER.md`（知识资产分层）。改代码后跑 `go test ./...`；部署按第七节流程。
+
+---
+
+## 九、训练执行手册（DGX Spark GB10，2026-08-20 采购决策）
+
+> 目标：在第 3 步用小规模 LoRA SFT 验证数据可用性与 agent 行为对齐效果。
+> 前置条件：**合规人工决策完成**（第六章待办 1-3）方可执行训练。
+
+### 9.1 硬件与预期（基于我们实际负载估算）
+| 项 | DGX Spark (GB10) | 说明 |
+|---|---|---|
+| GPU | Blackwell，BF16 密集 ~40-60 TFLOPS | 峰值 1 PFLOP 是 FP4 稀疏宣传值，训练看 BF16 |
+| 内存 | 128GB 统一内存（273GB/s） | 7B/14B LoRA 富余；可跑 32B QLoRA、70B 4bit 推理 |
+| 训练吞吐 | ~500-1,500 tokens/s（带宽瓶颈） | 2,500 样本 × ~4K tokens × 3 epochs ≈ 3,000 万 tokens |
+| **预计单轮实验** | **5-15 小时**（夜间跑，白天分析） | 全量 16,442 条约 2-5 天 |
+| 合规 | 数据不出内网 | 满足"内部训练、禁止外发"约束（优于云 GPU） |
+
+### 9.2 环境准备（一次性）
+```bash
+# 1. 系统: DGX OS(预装) 或 Ubuntu + NVIDIA 驱动 + CUDA
+# 2. NGC 容器(推荐)或原生 Python:
+#    docker run --gpus all -it --shm-size 32g nvcr.io/nvidia/pytorch:24.xx-py3
+# 3. 训练框架:
+pip install "llamafactory[torch]"      # 或 git clone https://github.com/hiyouga/LLaMA-Factory
+pip install transformers peft accelerate
+# 4. 模型(首次运行自动下载, 国内可配 HF_ENDPOINT=https://hf-mirror.com):
+#    Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+### 9.3 数据迁移（从服务器）
+```bash
+# 在 DGX Spark 上(约 1.7GB, 内网/直连):
+scp root@82.156.138.160:/opt/llm-platform-build/train-data/train.jsonl ./
+# 代码: git clone https://github.com/wtlhs/llm-gateway 或拷贝 scripts/sft/
+```
+
+### 9.4 执行（三步）
+```bash
+# 1) 准备: 分层抽样(长度<=8K 优先 + 工具轮>=50%) + sharegpt 格式
+python prepare_dataset.py --input train.jsonl --out-dir ./data \
+    --train-n 2500 --eval-n 200 --max-len 8192 --tool-ratio 0.5
+
+# 2) 训练(默认 Qwen2.5-Coder-7B-Instruct, LoRA r16; 环境变量可覆盖)
+BASE_MODEL=Qwen/Qwen2.5-Coder-7B-Instruct MAX_LEN=8192 EPOCHS=3 bash train_lora.sh
+
+# 3) 评测: 工具格式遵循率 + 回答非空率 + 生成抽样
+python evaluate.py --model ./output/qwen-sft --data ./data/eval.json --sample-n 20
+```
+
+### 9.5 验收标准与决策树
+| 指标 | 达标线 |
+|---|---|
+| 训练 loss 收敛（对比 `CUTOFF=0.9` 预留集） | 显著低于初始 |
+| 工具调用格式遵循率（`[TOOL_CALL] name({json})`） | ≥90% |
+| 回答非空率 | ≥95% |
+| 生成抽样人工审查 | 中文连贯、无 PII 明文（应为 `<EMAIL>`/`<PHONE>` 占位符） |
+
+```
+达标 → 第 4 步: 全量 16,442 条(--train-n 15000) + 15 分钟增量定期复训
+不达标 → 回数据管道调优: 抽样策略/max_len/清洗规则; 或换底座(Qwen3-8B/GLM-4-9B)
+```
+
+### 9.6 常见问题排查（参考本批历史问题）
+| 现象 | 处理 |
+|---|---|
+| 训练显存不足 | 降低 `MAX_LEN`（数据 p50=10K tokens，prepare 已优先抽 ≤8K）或 `BATCH`/`GRAD_ACC` |
+| 数据加载报格式错 | 确认 `train.json` 为 sharegpt `conversations` 格式（prepare 已生成）；LLaMA-Factory 需 `dataset_info.json` 登记 |
+| 模型输出含 `<EMAIL>` 占位符 | 正常（PII 清洗预期行为）；若含明文邮箱 → 训练集泄漏，停止并查 pii 清洗 |
+| 训练太慢 | 接受（GB10 带宽瓶颈）；或减小 `MAX_LEN`/样本量先验证收敛 |
+| 长上下文截断丢尾部 | 属预期（`cutoff_len` 截断）；如需提升可调大 `MAX_LEN`（16K 时 60% 样本可全量入） |
+
+---
