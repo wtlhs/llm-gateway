@@ -319,5 +319,13 @@ func BuildSample(promptRaw, completionRaw, toolCallsRaw, systemContent string) (
 	}
 	out = append(out, messages...)
 	out = append(out, Message{Role: "assistant", Content: content, ToolCalls: calls})
+	// PII 二次清洗(合规, 2026-08-20): 网关 redact 漏洞 + system/tool 内容来源,
+	// 输出前强制清洗所有消息文本与工具参数
+	for i := range out {
+		out[i].Content = CleanPII(out[i].Content)
+		for j := range out[i].ToolCalls {
+			out[i].ToolCalls[j].Function.Arguments = CleanPII(out[i].ToolCalls[j].Function.Arguments)
+		}
+	}
 	return &Sample{Messages: out}, true
 }

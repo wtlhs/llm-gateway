@@ -17,7 +17,9 @@ var redactRules = []struct {
 	{"phone", regexp.MustCompile(`\b1[3-9]\d{9}\b`), []byte("138****1234")},
 	// 身份证 18 位(末位 X)
 	{"idcard", regexp.MustCompile(`\b\d{17}[\dXx]\b`), []byte("110101****1234")},
-	{"email", regexp.MustCompile(`\b[\w.]+@[\w.]+\.\w+\b`), []byte("a***@example.com")},
+	// email: [\w.-]+ 含连字符域名(yuexin-logistics.com / wiser-bridge.com 等)——
+	// 旧规则 [\w.]+ 不含 '-' 导致带连字符域名漏脱敏(2026-08-20 合规审计发现)
+	{"email", regexp.MustCompile(`\b[\w.-]+@[\w.-]+\.\w+\b`), []byte("a***@example.com")},
 	{"bankcard", regexp.MustCompile(`\b\d{16,19}\b`), []byte("****4321")},
 	{"apikey", regexp.MustCompile(`\bsk-[A-Za-z0-9]{20,}\b`), []byte("sk-***")},
 }

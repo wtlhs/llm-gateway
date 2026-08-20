@@ -6,6 +6,43 @@ import (
 	"testing"
 )
 
+func TestCleanPII(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`联系 liulei@yuexin-logistics.com 处理`, `联系 <EMAIL> 处理`},
+		{`mail yisong@wiser-bridge.com cc`, `mail <EMAIL> cc`},
+		{`电话 18027664359 联系`, `电话 <PHONE> 联系`},
+		{`内网 10.58.12.34 和 192.168.1.1`, `内网 <LAN_IP> 和 <LAN_IP>`},
+		{`订单号 387679178771773416 保留`, `订单号 387679178771773416 保留`}, // 18 位数字不误伤
+		{`正常文本`, `正常文本`},
+	}
+	for _, c := range cases {
+		if got := CleanPII(c.in); got != c.want {
+			t.Errorf("CleanPII(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	if !HasPII(`liulei@yuexin-logistics.com`) || HasPII(`正常`) {
+		t.Error("HasPII mismatch")
+	}
+}
+
+func TestBuildSample_PIICleaned(t *testing.T) {
+	prompt := `{"model":"glm-5.2","messages":[{"role":"user","content":"发邮件给 liulei@yuexin-logistics.com, 电话 18027664359"}]}`
+	comp := `{"choices":[{"message":{"content":"已发送至 <EMAIL> 和内网 10.0.0.5"}}]}`
+	s, ok := BuildSample(prompt, comp, `[{"index":0,"function":{"name":"Mail","arguments":"{\"to\":\"wangtianlong@yuexin-logistics.com\"}"}}]`, "You are ZCode")
+	if !ok {
+		t.Fatal("BuildSample failed")
+	}
+	for _, m := range s.Messages {
+		if strings.Contains(m.Content, "yuexin-logistics.com") || strings.Contains(m.Content, "18027664359") || strings.Contains(m.Content, "10.0.0.5") {
+			t.Errorf("PII leaked in %s: %q", m.Role, m.Content)
+		}
+	}
+	last := s.Messages[len(s.Messages)-1]
+	if len(last.ToolCalls) == 1 && strings.Contains(last.ToolCalls[0].Function.Arguments, "yuexin-logistics.com") {
+		t.Errorf("PII leaked in tool args: %q", last.ToolCalls[0].Function.Arguments)
+	}
+}
+
 func TestCleanRedacted(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{`maximum ****4321 minimum`, `maximum <REDACTED> minimum`},
